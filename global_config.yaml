@@ -1,0 +1,44 @@
+# Global configuration for ASR Pipeline
+# All paths are relative to asrmlg_exp_dir
+
+# ===== Path Configurations =====
+asrmlg_exp_dir: /home/lty/my_tixiao/asr_mlg
+output_dir: /home/lty/my_tixiao/asr_mlg/output
+g2p_root_dir: /home/lty/my_tixiao/asr_mlg/g2p
+
+# ===== Script Names =====
+train_script: corpus_process_package.py
+eval_script: evaluate.py
+language_map_name: language_map
+
+# ===== Resource Mapping =====
+res_dir_map:
+  "0": ubctc_duan
+  "1": rnnt_ctc_duan
+  "2": rnnt_ed_duan
+  "3": yun
+
+lang_abbr_map:
+  "69260": En
+  "69160": Ja
+  "69520": Sp
+  "69240": Fr
+  "69340": De
+  "69400": Th
+  "69500": Ko
+
+# This maps is_yun to the output directory prefix
+scheme_map:
+  "0": ctc
+  "1": rnnt
+  "2": rnnt_ed
+  "3": whisper
+
+# ===== G2P Configuration =====
+cloud_g2p_langs: ["Ja", "Ko"]
+
+# ===== VCS Configuration =====
+max_versions: 10
+
+# ===== Resource Directory =====
+res_dir_name: res

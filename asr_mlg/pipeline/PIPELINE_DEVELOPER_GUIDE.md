@@ -21,20 +21,20 @@
 | 输出目录名里的 `model_type` 来自哪里 | `pipeline_executor.py` | L703 | `scheme_map`（无默认值，必须在 global_config.yaml 里设） |
 | Whisper 触发条件 | `pipeline_executor.py` | L625 | `is_yun == '3'` |
 | Whisper 产物命名格式 | `pipeline_executor.py` | L684 | `exact_bin_name` |
-| Whisper .bin 实际写到哪个目录 | `pipeline_executor.py` | L612 | `./output/` 相对 `wearlized_dir` |
+| Whisper .bin 输出目录 | `pipeline_executor.py` | L709-714 | ✅ 已修复：复制到 `final_whisper_out` |
 | G2P input.txt 路径 | `pipeline_executor.py` | L431 | `g2p_lang_dir/"input.txt"` |
 | G2P output.dict 路径（共享） | `pipeline_executor.py` | L432 | `g2p_lang_dir/"output.dict"` |
 | G2P 私有产物路径（step2 存但 step3 不用） | `pipeline_executor.py` | L433 | `task_out_path_temp/g2p_output_{msg}.dict` |
-| step3 实际读的 G2P 文件（潜在并发 bug） | `pipeline_executor.py` | L528 | 还是读 `output.dict` 共享文件 |
+| step3 实际读的 G2P 文件（已修复） | `pipeline_executor.py` | L533-537 | 优先读私有副本，共享作 fallback |
 | G2P 全局锁文件名 | `pipeline_executor.py` | L446 | `.g2p_engine_exec.lock` |
 | 走云端 G2P 的语言列表 | `pipeline_executor.py` | L469 | `cloud_g2p_langs` 配置项 |
 | 判断是否希伯来语 | `pipeline_executor.py` | L456 | `['he','heb','hebrew']` |
-| 希伯来语中用到的 `re` 模块（有 Bug） | `pipeline_executor.py` | L333 | 缺少 `import re`，详见第 2 节 |
+| 希伯来语中用到的 `re` 模块 | `pipeline_executor.py` | L31 | ✅ 已添加 `import re` |
 | lang_abbr 找不到时的最终 fallback | `pipeline_executor.py` | L423 | `task.get('language', msg)` |
 | 主词典路径拼法 | `pipeline_executor.py` | L518-519 | `res/{lang_name}_res/{res_dir_name}/new_dict` |
 | phones.syms 找不到时的 fallback | `pipeline_executor.py` | L525 | `phones.list.noblank` |
 | `predict_phone_for_new` 开关注入位置 | `pipeline_executor.py` | L544 | `merge_cmd.append(...)` |
-| step3 merge 失败时的返回值（有 Bug） | `pipeline_executor.py` | L560 | 无论成败都 `return True` |
+| step3 merge 失败时的返回值 | `pipeline_executor.py` | L576 | ✅ 已修复为 `return merge_success` |
 | `check_whisper_dependencies` 被谁调用 | `pipeline_executor.py` | L584 | **没有人调用**，是死代码 |
 | Phase 2 测试集生成的实现状态 | `pipeline_executor.py` | L747 | **`pass`，完全未实现** |
 | build_base_command 单横杠参数 | `pipeline_executor.py` | L358 | `single_dash_whitelist` |
@@ -168,17 +168,17 @@ g2p_replacement_list: config/g2p_fix.list     # G2P 替换列表，L147（相对
 
 ---
 
-### Bug-1：`re` 模块未导入，希伯来语必崩 ⚠️
+### Bug-1：`re` 模块未导入，希伯来语必崩 ⚠️ ✅ **已修复**
 
 - **位置**：`pipeline_executor.py:333`
 - **现象**：当 `lang_abbr in ['he', 'heb', 'hebrew']` 时，`generate_context_for_hebrew_oov` 在 L333 执行 `re.sub(r'<[^>]+>', '', context_sent)`，但文件顶部（L13–33）**没有 `import re`**。
 - **触发路径**：Hebrew 语言 + OOV 词属于某个槽位时（优先级 2 分支）触发。
 - **报错**：`NameError: name 're' is not defined`
-- **修复**：在文件顶部 import 区（约 L20 附近）添加 `import re`。
+- **修复**：已在文件顶部 import 区添加 `import re`（L31）。
 
 ---
 
-### Bug-2：Step3 读取 G2P 共享文件，并发场景有竞争窗口 ⚠️
+### Bug-2：Step3 读取 G2P 共享文件，并发场景有竞争窗口 ⚠️ ✅ **已修复**
 
 - **位置**：`pipeline_executor.py:528`
 - **现象**：Step2（L475）在拿到锁后把结果 copy 到私有文件 `g2p_output_{msg}.dict`，但 Step3（L528）直接读 G2P 引擎目录下的**共享** `output.dict`，而非私有副本。
@@ -192,11 +192,11 @@ g2p_replacement_list: config/g2p_fix.list     # G2P 替换列表，L147（相对
   # Step3 却读共享文件 (L528) ← 与 private_output_dict 无关
   g2p_output_dict = os.path.join(g2p_root_dir, lang_abbr, "g2p_models", "output.dict")
   ```
-- **修复方向**：Step3 应优先使用 `{task_out_path_temp}/g2p_output_{msg}.dict`，共享文件作 fallback。
+- **修复**：Step3 现在优先使用 `{task_out_path_temp}/g2p_output_{msg}.dict`，共享文件作 fallback。
 
 ---
 
-### Bug-3：Step3 失败时静默返回 True，不中断流水线 ⚠️
+### Bug-3：Step3 失败时静默返回 True，不中断流水线 ⚠️ ✅ **已修复**
 
 - **位置**：`pipeline_executor.py:560`
 - **现象**：`step3_merge_dict` 最后一行无论 merge 是否成功都 `return True`（`merge_success` 变量被计算但不影响返回值）。
@@ -205,9 +205,9 @@ g2p_replacement_list: config/g2p_fix.list     # G2P 替换列表，L147（相对
   ```python
   merge_success = run_subprocess(merge_cmd, ...)  # L547，计算了返回值
   if merge_success and ...: vcs.post_merge(...)    # L550，只用于决定是否执行 VCS
-  return True   # L560，永远返回 True！
+  return True   # L560，永远返回 True！ ← 旧代码
   ```
-- **修复**：将 L560 改为 `return merge_success`。
+- **修复**：L576 现已改为 `return merge_success`。
 
 ---
 
@@ -217,10 +217,11 @@ g2p_replacement_list: config/g2p_fix.list     # G2P 替换列表，L147（相对
 - **现象**：函数定义了检查三个产物文件是否存在的逻辑，但在整个文件中没有任何地方调用它。
 - **实际影响**：Step5 内部（L665–669）用 `if os.path.exists(src): ... else: return False` 手动检查，与 `check_whisper_dependencies` 逻辑等价但重复。
 - **建议**：在 `step5_whisper_package` 的入口处调用 `check_whisper_dependencies(hybridcnn_gpatch)`，删除 L665–669 的手动检查。
+- **状态**：未修改，保持原样（重复检查不影响功能）。
 
 ---
 
-### Bug-5：Whisper 产物 `.bin` 未被拷贝到 `final_whisper_out` 目录
+### Bug-5：Whisper 产物 `.bin` 未被拷贝到 `final_whisper_out` 目录 ⚠️ ✅ **已修复**
 
 - **位置**：`pipeline_executor.py:651–652` 与 `L612`
 - **现象**：
@@ -228,7 +229,7 @@ g2p_replacement_list: config/g2p_fix.list     # G2P 替换列表，L147（相对
   - 但 `generate_custom_cfg`（L612）把 `.bin` 输出路径写为 `./output/{bin_name}`，这是相对 `wearlized_dir` 的路径（即 `{whisper_tools_dir}/wearlized/output/`）。
   - **`.bin` 实际写入 `wearlized/output/`，`final_whisper_out` 目录永远是空的。**
 - **影响**：交付给下游的路径是错的，`final_whisper_out` 里没有任何文件。
-- **修复**：在 `step5_whisper_package` 末尾（L691 之后）添加把 `.bin` 从 `wearlized/output/` 复制到 `final_whisper_out` 的逻辑。
+- **修复**：已在 `step5_whisper_package` 末尾（L709-714）添加把 `.bin` 从 `wearlized/output/` 复制到 `final_whisper_out` 的逻辑。
 
 ---
 
@@ -238,6 +239,7 @@ g2p_replacement_list: config/g2p_fix.list     # G2P 替换列表，L147（相对
 - **现象**：`execute_testset_phase` 函数体只有一行 `pass`，只打了一行标题日志。
 - **影响**：`main()` 中（L773）提交了这个函数但它不做任何事，`enable_testset: true` 配置完全没效果。
 - **注意**：Phase 2 的实现逻辑（读 Excel → 增量判断 → TTS 生成 → 打包）在 `tools/make_test_set.py` 和 `tools/excel_to_txt_sampler.py` 中已存在，但尚未被 `execute_testset_phase` 调用。
+- **状态**：未实现，需要后续开发。
 
 ---
 
@@ -254,6 +256,24 @@ g2p_replacement_list: config/g2p_fix.list     # G2P 替换列表，L147（相对
 - **位置**：`pipeline_executor.py:731`
 - **现象**：4 个并发进程（`max_workers=4`）都往 `output/logs/build.log` 追加写。
 - **影响**：多任务的日志行会交错混在一起，排查时需要依靠 `[HH:MM:SS]` 时间戳和 `for {msg}` 字样手工分离。
+
+---
+
+### 新发现：环境依赖问题
+
+#### 问题-1：TTS 工具缺失导致 OOV 提取失败
+
+- **位置**：`corpus_process.py:929`
+- **现象**：运行时出现 `KeyError: 'Ja'` 或类似错误，因为 `ttsdict` 映射不完整。
+- **根因**：`corpus_process.py` 依赖 `xtts20_for_asr/bin_predict/ttsSample` 外部 TTS 工具，该工具不存在或未正确配置。
+- **影响**：Step1（OOV 提取）会在 `generate_phone_dict` 阶段失败。
+- **状态**：这是 `asr_mlg/` 核心模块的问题，需要在 `corpus_process.py` 中修复 `ttsdict` 映射。
+
+#### 问题-2：日语 NLP 模型需要 SudachiPy
+
+- **现象**：运行时出现 `ImportError: Japanese support requires SudachiPy and SudachiDict-core`
+- **解决**：需要安装 `pip install sudachipy sudachidict_core`
+- **状态**：已在环境配置中解决。
 
 ---
 

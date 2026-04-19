@@ -1,0 +1,139 @@
+# Job definition for ASR Pipeline
+# Each task defines a language/build configuration
+
+tasks:
+  # ===== English Task (ID: 69260) =====
+  - msg: "en_nav_test"
+    l: 69260
+    is_yun: 0
+
+    # Corpus paths (relative to asrmlg_exp_dir)
+    excel_corpus_path: corpus/en_corpus.xlsx
+    cp: corpus/en_corpus.xlsx
+
+    # Resource paths
+    dict: res/En_res/ubctc_duan/new_dict
+    word_syms: res/En_res/ubctc_duan/words.syms
+    phone_syms: res/En_res/ubctc_duan/phones.syms
+    triphone_syms: res/En_res/ubctc_duan/triphones.syms
+    hmm_list: res/En_res/ubctc_duan/hmm_list
+    hmm_list_blank: res/En_res/ubctc_duan/hmm_list_blank
+    mapping: res/En_res/ubctc_duan/mapping.txt
+
+    # Pipeline switches
+    enable_g2p: true
+    enable_merge_dict: true
+    enable_whisper_package: false
+
+    # G2P behavior
+    predict_phone_for_new: true
+
+  # ===== Japanese Task (ID: 69160) =====
+  - msg: "ja_nav_test"
+    l: 69160
+    is_yun: 0
+
+    excel_corpus_path: corpus/ja_corpus.xlsx
+    cp: corpus/ja_corpus.xlsx
+
+    dict: res/Ja_res/ubctc_duan/new_dict
+    word_syms: res/Ja_res/ubctc_duan/words.syms
+    phone_syms: res/Ja_res/ubctc_duan/phones.syms
+    triphone_syms: res/Ja_res/ubctc_duan/triphones.syms
+    hmm_list: res/Ja_res/ubctc_duan/hmm_list
+    hmm_list_blank: res/Ja_res/ubctc_duan/hmm_list_blank
+    mapping: res/Ja_res/ubctc_duan/mapping.txt
+
+    enable_g2p: true
+    enable_merge_dict: true
+    enable_whisper_package: false
+
+    predict_phone_for_new: true
+
+  # ===== French Task (ID: 69240) =====
+  - msg: "fr_nav_test"
+    l: 69240
+    is_yun: 0
+
+    excel_corpus_path: corpus/fr_corpus.xlsx
+    cp: corpus/fr_corpus.xlsx
+
+    dict: res/Fr_res/ubctc_duan/new_dict
+    word_syms: res/Fr_res/ubctc_duan/words.syms
+    phone_syms: res/Fr_res/ubctc_duan/phones.syms
+    triphone_syms: res/Fr_res/ubctc_duan/triphones.syms
+    hmm_list: res/Fr_res/ubctc_duan/hmm_list
+    hmm_list_blank: res/Fr_res/ubctc_duan/hmm_list_blank
+    mapping: res/Fr_res/ubctc_duan/mapping.txt
+
+    enable_g2p: true
+    enable_merge_dict: true
+    enable_whisper_package: false
+
+    predict_phone_for_new: true
+
+  # ===== German Task (ID: 69340) =====
+  - msg: "de_nav_test"
+    l: 69340
+    is_yun: 0
+
+    excel_corpus_path: corpus/de_corpus.xlsx
+    cp: corpus/de_corpus.xlsx
+
+    dict: res/De_res/ubctc_duan/new_dict
+    word_syms: res/De_res/ubctc_duan/words.syms
+    phone_syms: res/De_res/ubctc_duan/phones.syms
+    triphone_syms: res/De_res/ubctc_duan/triphones.syms
+    hmm_list: res/De_res/ubctc_duan/hmm_list
+    hmm_list_blank: res/De_res/ubctc_duan/hmm_list_blank
+    mapping: res/De_res/ubctc_duan/mapping.txt
+
+    enable_g2p: true
+    enable_merge_dict: true
+    enable_whisper_package: false
+
+    predict_phone_for_new: true
+
+  # ===== Thai Task (ID: 69400) =====
+  - msg: "th_nav_test"
+    l: 69400
+    is_yun: 0
+
+    excel_corpus_path: corpus/th_corpus.xlsx
+    cp: corpus/th_corpus.xlsx
+
+    dict: res/Th_res/ubctc_duan/new_dict
+    word_syms: res/Th_res/ubctc_duan/words.syms
+    phone_syms: res/Th_res/ubctc_duan/phones.syms
+    triphone_syms: res/Th_res/ubctc_duan/triphones.syms
+    hmm_list: res/Th_res/ubctc_duan/hmm_list
+    hmm_list_blank: res/Th_res/ubctc_duan/hmm_list_blank
+    mapping: res/Th_res/ubctc_duan/mapping.txt
+
+    enable_g2p: true
+    enable_merge_dict: true
+    enable_whisper_package: false
+
+    predict_phone_for_new: true
+
+  # ===== Korean Task (ID: 69500) =====
+  - msg: "ko_nav_test"
+    l: 69500
+    is_yun: 0
+
+    excel_corpus_path: corpus/ko_corpus.xlsx
+    cp: corpus/ko_corpus.xlsx
+
+    dict: res/Ko_res/ubctc_duan/new_dict
+    word_syms: res/Ko_res/ubctc_duan/words.syms
+    phone_syms: res/Ko_res/ubctc_duan/phones.syms
+    triphone_syms: res/Ko_res/ubctc_duan/triphones.syms
+    hmm_list: res/Ko_res/ubctc_duan/hmm_list
+    hmm_list_blank: res/Ko_res/ubctc_duan/hmm_list_blank
+    mapping: res/Ko_res/ubctc_duan/mapping.txt
+
+    enable_g2p: true
+    enable_merge_dict: true
+    enable_whisper_package: false
+
+    predict_phone_for_new: true

@@ -28,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 import random
+import re
 import pandas as pd
 import yaml
 
@@ -517,7 +518,7 @@ def step3_merge_dict(task: dict, global_cfg: dict, msg: str, log_file: str) -> b
     # Path to the primary lexicon that needs updating
     target_res_dir = os.path.join(res_base_dir, f"{lang_name}_res", res_dir_name)
     target_dict_path = os.path.join(target_res_dir, "new_dict")
-    
+
     # Locate phoneme validation file
     phone_syms_path = os.path.join(target_res_dir, "phones.syms")
     if not os.path.exists(phone_syms_path):
@@ -525,8 +526,22 @@ def step3_merge_dict(task: dict, global_cfg: dict, msg: str, log_file: str) -> b
         if os.path.exists(fallback_path):
             phone_syms_path = fallback_path
 
-    g2p_output_dict = os.path.join(global_cfg.get('g2p_root_dir', ''), lang_abbr, "g2p_models", "output.dict")
+    # Bug-2 Fix: Use private_output_dict (from step2) if available, fallback to shared G2P output
+    # Reconstruct the task_out_path_temp from the same logic as run_phase1_pipeline
+    base_out_dir = global_cfg.get('output_dir')
+    scheme_map = global_cfg.get('scheme_map', {})
+    model_type = scheme_map.get(is_yun_val, 'unknown')
+    target_dir = os.path.join(base_out_dir, lang_name, msg, f"{model_type}_{datetime.now().strftime('%Y%m%d')}")
+    task_out_path_temp = target_dir + "_temp"
+    private_output_dict = os.path.join(task_out_path_temp, f"g2p_output_{msg}.dict")
+
+    # Use private copy from step2 if it exists, otherwise fallback to shared G2P output
+    g2p_output_dict = private_output_dict if os.path.exists(private_output_dict) else \
+                      os.path.join(global_cfg.get('g2p_root_dir', ''), lang_abbr, "g2p_models", "output.dict")
+
     if not os.path.exists(g2p_output_dict):
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f"\n[warning] g2p output dict not found: {g2p_output_dict}. skipping merge.\n")
         return False
 
     # Snapshot before merge
@@ -557,7 +572,8 @@ def step3_merge_dict(task: dict, global_cfg: dict, msg: str, log_file: str) -> b
             "--max_versions", str(global_cfg.get('max_versions', 10))
         ], global_cfg.get('asrmlg_exp_dir'), log_file)
 
-    return True
+    # Bug-3 Fix: Return actual merge_success instead of always returning True
+    return merge_success
 
 def step4_full_build(base_cmd: List[str], task_out_path: str, msg: str,
                      patch_type: str, asrmlg_exp_dir: str, log_file: str) -> bool:
@@ -680,15 +696,23 @@ def step5_whisper_package(task: dict, global_cfg: dict, hybridcnn_gpatch: str, l
     task_uuid = uuid.uuid4().hex[:8]
     template_cfg = os.path.join(wearlized_dir, "wfst_serialize_large.241227_patch.cfg")
     custom_cfg_name = f"task_{task_uuid}.cfg"
-    
+
     exact_bin_name = f"whisper_{patch_type}_{patch_scale}_{patch_name}_{task_uuid}.bin"
     generate_custom_cfg(template_cfg, os.path.join(wearlized_dir, custom_cfg_name), work_dir, exact_bin_name, patch_scale)
 
     # Dynamic library binding and serialization
     run_env = os.environ.copy()
     run_env['LD_LIBRARY_PATH'] = f"./:{run_env.get('LD_LIBRARY_PATH', '')}"
-    if not run_subprocess(["./wfst_serialize", custom_cfg_name], wearlized_dir, log_file, env=run_env): 
+    if not run_subprocess(["./wfst_serialize", custom_cfg_name], wearlized_dir, log_file, env=run_env):
         return False
+
+    # Bug-5 Fix: Copy .bin from wearlized/output/ to final_whisper_out
+    bin_source = os.path.join(wearlized_dir, "output", exact_bin_name)
+    if os.path.exists(bin_source):
+        shutil.copy2(bin_source, final_whisper_out)
+    else:
+        with open(log_file, 'a', encoding='utf-8') as f_log:
+            f_log.write(f"\n[warning] whisper bin not found at {bin_source}\n")
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS: whisper artifacts exported to {final_whisper_out}")
     return True
