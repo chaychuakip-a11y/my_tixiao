@@ -20,9 +20,9 @@ def eng_g2p(word):
     if word_lower in cmudict.dict():
         phones_list = cmudict.dict()[word_lower]
         if phones_list:
-            # Return first pronunciation, join phones with spaces
             phones = ' '.join(phones_list[0])
-            return phones
+            phones_clean = ''.join([c for c in phones if not c.isdigit()])
+            return phones_clean
 
     # If not found, try without stress markers
     for entry, pronunciations in cmudict.entries():

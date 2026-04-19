@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Mock FST tool"""
+import sys, os
+script = os.path.basename(sys.argv[0])
+args = sys.argv[1:]
+if 'fstprint' in script:
+    _, isyms, osyms, inp, out = sys.argv
+    with open(inp) as f: data = f.read()
+    with open(out, 'w') as f: f.write(data)
+else:
+    output = args[-1]
+    open(output, 'w').close()
+print(f"{script}: processed")
