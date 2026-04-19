@@ -102,8 +102,9 @@ def main():
     parser.add_argument("-i", "--input_new", required=True, help="New dictionary file (G2P output)")
     parser.add_argument("-o", "--output_base", required=True, help="Target base dictionary file")
     parser.add_argument("-p", "--phone_syms", required=True, help="Project phoneset symbols file")
+    parser.add_argument("--predict_phone_for_new", action="store_true", help="(Deprecated, ignored)")
     args = parser.parse_args()
-    
+
     merge_dictionaries(args.output_base, args.input_new, args.phone_syms)
 
 if __name__ == "__main__":
