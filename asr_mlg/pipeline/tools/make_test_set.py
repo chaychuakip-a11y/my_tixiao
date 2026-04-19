@@ -242,7 +242,8 @@ def main():
              open(filter_txt, 'w', encoding='utf-8') as f_filter, \
              open(synthesize_txt, 'w', encoding='utf-8') as f_synth:
             for line in infile:
-                line = line.strip(); if not line: continue
+                line = line.strip()
+                if not line: continue
                 replaced_line = " ".join([replacements.get(w.upper(), w) for w in line.split()])
                 corpus_proc_inst.filter_corpus_by_char(line, f_filter, None, args.post)
                 corpus_proc_inst.filter_corpus_by_char(replaced_line, f_synth, None, args.post)
