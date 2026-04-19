@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""
+Mock Phonetisaurus G2P Tool - Placeholder for proprietary phonetisaurus.
+Uses CMUdict for English grapheme-to-phoneme conversion.
+
+Usage:
+    phonetisaurus-g2pfst --model=... --nbest=2 --beam=... --wordlist=<input> > <output>
+
+Output format (for each word):
+    word\tpronunciation1 ||| pronunciation2 ||| ...
+"""
+
+import sys
+import os
+import argparse
+
+# Add project root to path for cmudict
+sys.path.insert(0, '/home/lty/my_tixiao')
+
+
+def eng_g2p_cmu(word):
+    """Convert English word to phonemes using CMUdict."""
+    import cmudict
+
+    word_lower = word.strip().lower()
+
+    if word_lower in cmudict.dict():
+        phones_list = cmudict.dict()[word_lower]
+        if phones_list:
+            # Return first pronunciation, join phones with spaces
+            phones = ' '.join(phones_list[0])
+            return phones
+
+    # If not found, try to find similar
+    for entry, pronunciations in cmudict.entries():
+        if entry.lower() == word_lower:
+            phones = ' '.join(pronunciations[0])
+            return phones
+
+    return None
+
+
+def process_wordlist(input_file, output_file):
+    """Process word list and generate phoneme output."""
+    with open(input_file, 'r', encoding='utf-8') as fin:
+        words = [line.strip() for line in fin if line.strip()]
+
+    output_lines = []
+    for word in words:
+        phones = eng_g2p_cmu(word)
+        if phones:
+            # Format: word\tphones ||| alt_phones |||
+            output_lines.append(f"{word}\t{phones} |||")
+        else:
+            # If not found, just use the word
+            output_lines.append(f"{word}\t{word} |||")
+
+    with open(output_file, 'w', encoding='utf-8') as fout:
+        fout.write('\n'.join(output_lines) + '\n')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Mock Phonetisaurus G2P')
+    parser.add_argument('--model', required=True, help='Model file (unused in mock)')
+    parser.add_argument('--nbest', type=int, default=2, help='N-best count')
+    parser.add_argument('--beam', type=int, default=10000, help='Beam width')
+    parser.add_argument('--thresh', type=float, default=99.0, help='Threshold')
+    parser.add_argument('--accumulate', type=bool, default=False, help='Accumulate')
+    parser.add_argument('--pmass', type=float, default=0.0, help='Probability mass')
+    parser.add_argument('--nlog_probs', type=bool, default=True, help='Use nlog probs')
+    parser.add_argument('--wordlist', required=True, help='Input word list')
+
+    args = parser.parse_args()
+
+    # Read from wordlist file and write to stdout
+    wordlist_path = args.wordlist
+    if not os.path.isabs(wordlist_path):
+        wordlist_path = os.path.join(os.getcwd(), wordlist_path)
+
+    # Create temp output file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        process_wordlist(wordlist_path, tmp_path)
+
+        # Read and output to stdout (mimics shell redirection)
+        with open(tmp_path, 'r') as f:
+            print(f.read(), end='')
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return 0
+
+
+if __name__ == '__main__':
+    import tempfile
+    sys.exit(main())

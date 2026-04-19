@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""
+Mock TTS Sample Tool - Placeholder for proprietary XTTS TTS engine.
+Uses CMUdict for English and epitran for other languages.
+
+Usage:
+    ./ttsSample -l libttsknl.so -v "{lang_id}" -x 1 -i "{input_file}" -o wav_outdir/ -m 1 -f 1 -g 1
+
+Output:
+    Creates frontinfo.txt in the current directory with phoneme mappings.
+"""
+
+import sys
+import os
+import argparse
+import tempfile
+
+# Language code to G2P method mapping
+# English uses CMUdict, others use epitran
+LANG_TO_EPI = {
+    # "69260": ("eng-Latn", "english"),  # English - no good epitran model, handled separately
+    "69160": ("jpn-Jpan", "japan"),    # Japanese
+    "69180": ("ara-Arab", "arabic"),   # Arabic
+    "69240": ("fra-Latn", "french"),  # French
+    "69520": ("spa-Latn", "spanish"), # Spanish
+    "69340": ("deu-Latn", "german"),  # German
+    "69380": ("ita-Latn", "italian"), # Italian
+    "70061": ("por-Latn", "portuguese"),  # Portuguese
+    "69200": ("rus-Cyrl", "russian"),  # Russian
+    "70600": ("fas-Arab", "persian"),  # Persian/Farsi
+    "69400": ("tha-Thai", "thai"),     # Thai
+    "70030": ("msa-Latn", "malay"),    # Malay
+    "70440": ("ind-Latn", "indonesian"),  # Indonesian
+    "70520": ("swe-Latn", "swedish"),  # Swedish
+    "69280": ("nld-Latn", "dutch"),    # Dutch
+    "69500": ("kor-Hang", "korean"),   # Korean
+}
+
+def g2p_word_epitran(word, epitran_code):
+    """Convert a word to phonemes using epitran."""
+    try:
+        import epitran
+        epi = epitran.Epitran(epitran_code)
+        phones = epi.transliterate(word.strip())
+        phones_clean = phones.replace(' ', '')
+        return phones_clean
+    except Exception as e:
+        print(f"Warning: Failed to convert '{word}' with epitran: {e}", file=sys.stderr)
+        return None
+
+
+def g2p_word_cmu(word):
+    """Convert English word to phonemes using CMUdict."""
+    import cmudict
+
+    word_lower = word.strip().lower()
+
+    if word_lower in cmudict.dict():
+        phones_list = cmudict.dict()[word_lower]
+        if phones_list:
+            phones = ' '.join(phones_list[0])
+            # Remove stress markers (0, 1, 2)
+            phones_clean = ''.join([c for c in phones if not c.isdigit()])
+            return phones_clean
+
+    for entry, pronunciations in cmudict.entries():
+        if entry.lower() == word_lower:
+            phones = ' '.join(pronunciations[0])
+            phones_clean = ''.join([c for c in phones if not c.isdigit()])
+            return phones_clean
+
+    return None
+
+
+def process_dict_file(input_file, output_file, lang_code):
+    """Process dictionary file and generate frontinfo.txt format."""
+
+    # Determine if we should use English CMUdict path
+    use_english = False
+    if lang_code in ["69260", "En", "en", "english", "English"]:
+        use_english = True
+    else:
+        # Check if it's a known language with epitran
+        if lang_code in LANG_TO_EPI:
+            epitran_code = LANG_TO_EPI[lang_code][0]
+            print(f"Using epitran: {epitran_code} for language code: {lang_code}", file=sys.stderr)
+        else:
+            # Try to find by partial match
+            epitran_code = None
+            for key, (code, name) in LANG_TO_EPI.items():
+                if lang_code.lower() in name.lower() or lang_code == key:
+                    epitran_code = code
+                    break
+            if epitran_code:
+                print(f"Using epitran: {epitran_code} for language code: {lang_code}", file=sys.stderr)
+            else:
+                print(f"Warning: Unknown language code '{lang_code}', defaulting to English CMUdict", file=sys.stderr)
+                use_english = True
+
+    with open(input_file, 'r', encoding='utf-8') as fin, \
+         open(output_file, 'w', encoding='utf-8') as fout:
+
+        for line in fin:
+            word = line.strip()
+            if not word:
+                continue
+
+            # Skip entries that are already in phoneme format (contain tabs)
+            if '\t' in word:
+                fout.write(word + '\n')
+                continue
+
+            if use_english:
+                phones = g2p_word_cmu(word)
+            else:
+                phones = g2p_word_epitran(word, epitran_code)
+
+            if phones:
+                fout.write(f"{word}\t{phones}\n")
+            else:
+                fout.write(f"{word}\t{word}\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Mock TTS Sample Tool')
+    parser.add_argument('-l', '--lib', required=True, help='Library file (unused in mock)')
+    parser.add_argument('-v', '--lang', required=True, help='Language ID')
+    parser.add_argument('-x', '--unknown', type=int, default=1, help='Unknown flag')
+    parser.add_argument('-i', '--input', required=True, help='Input file')
+    parser.add_argument('-o', '--output', required=True, help='Output directory')
+    parser.add_argument('-m', '--flag_m', type=int, default=1, help='Flag m')
+    parser.add_argument('-f', '--flag_f', type=int, default=1, help='Flag f')
+    parser.add_argument('-g', '--flag_g', type=int, default=1, help='Flag g')
+
+    args = parser.parse_args()
+
+    # Generate output in current directory (frontinfo.txt)
+    frontinfo_path = os.path.join(os.getcwd(), "frontinfo.txt")
+
+    input_path = args.input
+    if not os.path.isabs(input_path):
+        input_path = os.path.join(os.getcwd(), input_path)
+
+    print(f"Processing: {input_path}", file=sys.stderr)
+    print(f"Language: {args.lang}", file=sys.stderr)
+    print(f"Output: {frontinfo_path}", file=sys.stderr)
+
+    # Create wav_outdir if needed
+    os.makedirs(args.output, exist_ok=True)
+
+    # Process the dictionary file
+    process_dict_file(input_path, frontinfo_path, args.lang)
+
+    print("TTS Sample completed successfully", file=sys.stderr)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
