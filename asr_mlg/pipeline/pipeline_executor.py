@@ -361,7 +361,8 @@ def build_base_command(task: dict, python_exec: str, train_script: str, asrmlg_e
     # Internal keys used by the pipeline but NOT passed to the core scripts
     internal_keys = {
         'enable_g2p', 'enable_merge_dict', 'enable_testset', 'enable_eval',
-        'input_wav', 'output', 'only_corpus_process', 'enable_whisper_package', 'whisper_config'
+        'input_wav', 'output', 'only_corpus_process', 'enable_whisper_package', 'whisper_config',
+        'language'  # pipeline metadata, not passed to corpus_process_package
     }
 
     # Keys that represent paths needing absolute resolution
@@ -470,7 +471,7 @@ def step2_g2p_predict(task: dict, global_cfg: dict, msg: str, task_out_path: str
                 cloud_langs = global_cfg.get('cloud_g2p_langs', [])
                 g2p_script = "run_cloud.sh" if lang_abbr in cloud_langs or lang_id in cloud_langs else "run.sh"
                 
-                success = run_subprocess(["bash", g2p_script], str(g2p_lang_dir), log_file)
+                success = run_subprocess(["./" + g2p_script], str(g2p_lang_dir), log_file)
                 
                 if success and g2p_output_dict_shared.exists():
                     shutil.copy2(g2p_output_dict_shared, private_output_dict)
