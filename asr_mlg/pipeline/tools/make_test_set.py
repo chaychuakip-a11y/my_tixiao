@@ -43,6 +43,9 @@ sys.path.insert(0, str(ENGINE_DIR))
 if PYTHON_LIB_PATH.exists():
     sys.path.insert(0, str(PYTHON_LIB_PATH))
 
+# corpus_process.py opens "language_map" with a relative path → must run from ENGINE_DIR
+os.chdir(str(ENGINE_DIR))
+
 # Import main project dependencies
 from corpus_process import *
 
