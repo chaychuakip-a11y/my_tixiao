@@ -677,36 +677,52 @@ def check_whisper_dependencies(source_dir: str) -> bool:
     return all(os.path.exists(f) for f in required_artifacts)
 
 
-def generate_custom_cfg(template_path: str, output_cfg_path: str, work_dir: str, bin_output_name: str, patch_scale: str):
-    """Generates a specialized .cfg file for the wfst_serialize binary tool."""
-    config = configparser.ConfigParser(allow_no_value=True)
-    config.optionxform = str
-    config.read(template_path, encoding='utf-8')
-
-    if 'common' in config:
-        config['common']['lm_factor'] = str(patch_scale)
-
-    abs_work_dir = os.path.abspath(work_dir)
-    if 'input' in config:
-        config['input']['wfst_net_txt'] = f"{abs_work_dir}/output.wfst.mvrd.txt"
-        config['input']['edDcitSymsFile'] = f"{abs_work_dir}/edDictPhones.syms"
-        config['input']['phoneSymsFile'] = f"{abs_work_dir}/edDictPhones.syms"
-        config['input']['wordsSymsFile'] = f"{abs_work_dir}/words.syms"
-        config['input']['word2PhoneFile'] = f"{abs_work_dir}/aaa_dict_for_use.remake"
-
-    if 'output' in config:
-        config['output']['OutWfst.bin'] = f"./output/{bin_output_name}"
-
+def generate_custom_cfg(output_cfg_path: str, bin_output_name: str,
+                         patch_scale: str, lang_name: str):
+    """Generates wfst_serialize .cfg from scratch.
+    CFG and all input/output files are co-located in work_dir; paths use ./ prefix.
+    """
+    cfg_content = (
+        "[common]\n"
+        "business=\n"
+        f"lm_factor= {patch_scale}\n"
+        "penalty_factor= 5\n"
+        f"lang_name= {lang_name}\n"
+        "pack_name= car\n"
+        "\n"
+        "[WFST]\n"
+        "net_type= 5\n"
+        "\n"
+        "class_type= pername\n"
+        "\n"
+        "[input]\n"
+        "wfst_net_txt=./output.wfst.mvrd.txt\n"
+        "edDcitSymsFile=./edDictPhones.syms\n"
+        "phoneSymsFile=./edDictPhones.syms\n"
+        "wordsSymsFile=./words.syms\n"
+        "word2PhoneFile=./aaa_dict_for_use.remake\n"
+        "\n"
+        "[input_option]\n"
+        "mappingFile=\n"
+        "stateSymsFile=\n"
+        "pinyinSymsFile=\n"
+        "PYDictFile=\n"
+        "UpCaseConvertFile=\n"
+        "phoneDistanceFile=\n"
+        "\n"
+        "[output]\n"
+        f"OutWfst.bin=./{bin_output_name}\n"
+    )
     with open(output_cfg_path, 'w', encoding='utf-8') as f:
-        config.write(f)
-
+        f.write(cfg_content)
     return output_cfg_path
 
 
 def step5_whisper_package(task: dict, global_cfg: dict, hybridcnn_gpatch: str, log_file: str) -> bool:
     """
     Step 5: Whisper-specific serialization.
-    Converts ASR artifacts into a format optimized for Whisper-based edge devices.
+    Mirrors whisper_pack.sh: reads lans.txt, applies gongban→yun_es naming,
+    generates CFG from scratch, runs wfst_serialize, then computes MD5.
     """
     if str(task.get('is_yun', '')) != '3':
         return True
@@ -723,68 +739,89 @@ def step5_whisper_package(task: dict, global_cfg: dict, hybridcnn_gpatch: str, l
     patch_name = whisper_cfg.get('name', f"{current_user}_{msg}_{timestamp}")
     patch_type = whisper_cfg.get('patch_type', msg)
     patch_scale = str(whisper_cfg.get('patch_scale', '1.0'))
-    
-    train_dict = whisper_cfg.get('train_dict')
-    phoneset_path = whisper_cfg.get('phoneset')
-    package_ed_target = whisper_cfg.get('package_ed_target')
 
-    if not all([train_dict, phoneset_path, package_ed_target]):
-        return False
+    asrmlg_exp_dir = global_cfg.get('asrmlg_exp_dir', '')
+    res_yun_dir = os.path.join(asrmlg_exp_dir, 'res', f"{lang_name}_res", 'yun')
 
-    whisper_tools_dir = global_cfg.get('whisper_tools_dir', global_cfg.get('asrmlg_exp_dir'))
-    work_dir = os.path.join(whisper_tools_dir, work_dir_name)
+    # train_dict / phoneset 自动从 res/{lang}_res/yun/ 推导，可在 whisper_config 中覆盖
+    train_dict    = whisper_cfg.get('train_dict')    or os.path.join(res_yun_dir, 'new_dict')
+    phoneset_path = whisper_cfg.get('phoneset')      or os.path.join(res_yun_dir, 'phones.syms')
+    package_ed_target = whisper_cfg.get('package_ed_target', '/dev/null')  # placeholder
+
+    for p, label in [(train_dict, 'train_dict'), (phoneset_path, 'phoneset')]:
+        if not os.path.exists(p):
+            with open(log_file, 'a', encoding='utf-8') as f_log:
+                f_log.write(f"[error] step5: {label} not found: {p}\n")
+            return False
+
     base_out_dir = global_cfg.get('output_dir')
-    final_whisper_out = os.path.join(base_out_dir, lang_name, msg, f"whisper_bin_{timestamp}")
-    os.makedirs(final_whisper_out, exist_ok=True)
+    out_yun_dir = os.path.join(base_out_dir, lang_name, 'yun', msg)  # 交付目录
+    work_dir = os.path.join(out_yun_dir, work_dir_name)               # 构建工作目录
+
+    pipeline_dir = os.path.dirname(os.path.abspath(__file__))
+    pipeline_tools_dir = os.path.join(pipeline_dir, 'tools')   # run_replace_dict.sh / package_ed
+    whisper_bin_dir = os.path.join(pipeline_dir, 'bin')        # wfst_serialize 及其依赖库
 
     if os.path.exists(work_dir):
         shutil.rmtree(work_dir)
     os.makedirs(work_dir)
 
-    # Isolated build environment
+    # --- 临时 bin 名（写入 CFG，序列化后按 MD5 重命名）---
+    temp_bin_name = f"{lang_name}_{patch_type}_whisper_patch{patch_scale}_temp.bin"
+
+    # --- Copy artifacts from hybridCNN_Gpatch ---
     files_to_copy = [
         (os.path.join(hybridcnn_gpatch, "custom_G_pak", "G"), os.path.join(work_dir, "G")),
         (os.path.join(hybridcnn_gpatch, "custom_G_pak", "GeneratedG.DONE"), os.path.join(work_dir, "GeneratedG.DONE")),
         (os.path.join(hybridcnn_gpatch, "custom_corpus_process", "dict_dir", "aaa_dict_for_use"), os.path.join(work_dir, "aaa_dict_for_use"))
     ]
-
     for src, dst in files_to_copy:
         if os.path.exists(src):
             shutil.copy2(src, dst)
         else:
+            with open(log_file, 'a', encoding='utf-8') as f_log:
+                f_log.write(f"[error] step5: source file not found: {src}\n")
             return False
 
-    # Execute binary conversion tools
-    replace_dict_cmd = ["bash", "run_replace_dict.sh", train_dict, work_dir, lang_id]
-    if not run_subprocess(replace_dict_cmd, whisper_tools_dir, log_file): return False
-
-    dict_remake_path = os.path.join(work_dir, "aaa_dict_for_use.remake")
-    package_ed_cmd = ["./package_ed", dict_remake_path, phoneset_path, package_ed_target, work_dir]
-    if not run_subprocess(package_ed_cmd, whisper_tools_dir, log_file): return False
-
-    wearlized_dir = os.path.join(whisper_tools_dir, "wearlized")
-    task_uuid = uuid.uuid4().hex[:8]
-    template_cfg = os.path.join(wearlized_dir, "wfst_serialize_large.241227_patch.cfg")
-    custom_cfg_name = f"task_{task_uuid}.cfg"
-
-    exact_bin_name = f"whisper_{patch_type}_{patch_scale}_{patch_name}_{task_uuid}.bin"
-    generate_custom_cfg(template_cfg, os.path.join(wearlized_dir, custom_cfg_name), work_dir, exact_bin_name, patch_scale)
-
-    # Dynamic library binding and serialization
-    run_env = os.environ.copy()
-    run_env['LD_LIBRARY_PATH'] = f"./:{run_env.get('LD_LIBRARY_PATH', '')}"
-    if not run_subprocess(["./wfst_serialize", custom_cfg_name], wearlized_dir, log_file, env=run_env):
+    # --- run_replace_dict.sh (placeholder, pipeline/tools/) ---
+    replace_dict_cmd = ["bash", os.path.join(pipeline_tools_dir, "run_replace_dict.sh"), train_dict, work_dir, lang_id]
+    if not run_subprocess(replace_dict_cmd, work_dir, log_file):
         return False
 
-    # Bug-5 Fix: Copy .bin from wearlized/output/ to final_whisper_out
-    bin_source = os.path.join(wearlized_dir, "output", exact_bin_name)
-    if os.path.exists(bin_source):
-        shutil.copy2(bin_source, final_whisper_out)
-    else:
-        with open(log_file, 'a', encoding='utf-8') as f_log:
-            f_log.write(f"\n[warning] whisper bin not found at {bin_source}\n")
+    # --- package_ed (placeholder, pipeline/tools/) ---
+    dict_remake_path = os.path.join(work_dir, "aaa_dict_for_use.remake")
+    package_ed_cmd = [os.path.join(pipeline_tools_dir, "package_ed"), dict_remake_path, phoneset_path, package_ed_target, work_dir]
+    if not run_subprocess(package_ed_cmd, work_dir, log_file):
+        return False
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS: whisper artifacts exported to {final_whisper_out}")
+    # --- Generate CFG，CFG 和 bin 都在 work_dir 下 ---
+    cfg_name = "wfst_serialize_large.241227_patch.cfg"
+    cfg_path = os.path.join(work_dir, cfg_name)
+    generate_custom_cfg(cfg_path, temp_bin_name, patch_scale, lang_name)
+
+    # --- wfst_serialize，在 work_dir 下运行，二进制从 whisper_bin_dir 找 ---
+    run_env = os.environ.copy()
+    run_env['LD_LIBRARY_PATH'] = f"{whisper_bin_dir}:{run_env.get('LD_LIBRARY_PATH', '')}"
+    wfst_bin = os.path.join(whisper_bin_dir, "wfst_serialize")
+    if not run_subprocess([wfst_bin, cfg_name], work_dir, log_file, env=run_env):
+        return False
+
+    # --- 计算 MD5 后四位，交付到 out_yun_dir ---
+    bin_source = os.path.join(work_dir, temp_bin_name)
+    if not os.path.exists(bin_source):
+        with open(log_file, 'a', encoding='utf-8') as f_log:
+            f_log.write(f"[warning] whisper bin not found at {bin_source}\n")
+    else:
+        import hashlib
+        with open(bin_source, 'rb') as bf:
+            md5_suffix = hashlib.md5(bf.read()).hexdigest()[-4:]
+        final_bin_name = f"{lang_name}_{patch_type}_whisper_patch{patch_scale}_{md5_suffix}.bin"
+        os.makedirs(out_yun_dir, exist_ok=True)
+        shutil.copy2(bin_source, os.path.join(out_yun_dir, final_bin_name))
+        with open(log_file, 'a', encoding='utf-8') as f_log:
+            f_log.write(f"[step5] bin: {final_bin_name}\n")
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS: whisper bin exported to {out_yun_dir}")
     return True
 
 
@@ -999,15 +1036,34 @@ def _execute_testset_phase_impl(tasks: List[dict], global_cfg: dict):
 def main():
     """Main application entry point."""
     parser = argparse.ArgumentParser(description="ASR Pipeline Executor")
-    parser.add_argument('-g', '--global_config', required=False, help='Path to global_config.yaml (optional)')
-    parser.add_argument('-j', '--job', required=True, help='Path to job.yaml defining tasks')
+    parser.add_argument('-g', '--global_config', required=False, help='Path to global_config.yaml (default: config/global_config.yaml)')
+    parser.add_argument('-j', '--job', required=False, default=None, help='Path to job.yaml (default: config/job.yaml)')
     args = parser.parse_args()
 
     base_path = os.path.dirname(os.path.abspath(__file__))
 
+    # Auto-detect job.yaml in pipeline/config/ if -j not specified
+    job_path = args.job
+    if not job_path:
+        default_job = os.path.join(base_path, 'config', 'job.yaml')
+        if os.path.exists(default_job):
+            job_path = default_job
+            print(f"[INFO] job config  : {job_path} (auto-detected)")
+        else:
+            print("[error] -j <job.yaml> is required or place job.yaml in pipeline/config/")
+            sys.exit(1)
+
+    # Auto-detect global_config.yaml in pipeline/config/ if -g not specified
+    cfg_path = args.global_config
+    if not cfg_path:
+        default_cfg = os.path.join(base_path, 'config', 'global_config.yaml')
+        if os.path.exists(default_cfg):
+            cfg_path = default_cfg
+            print(f"[INFO] global_config: {cfg_path} (auto-detected)")
+
     # Load configurations or use empty defaults for zero-config
-    global_cfg = yaml.safe_load(open(args.global_config)) if args.global_config and os.path.exists(args.global_config) else {}
-    job_cfg = yaml.safe_load(open(args.job))
+    global_cfg = yaml.safe_load(open(cfg_path)) if cfg_path and os.path.exists(cfg_path) else {}
+    job_cfg = yaml.safe_load(open(job_path))
 
     # Apply smart path resolution
     global_cfg = resolve_and_bind_paths(global_cfg, base_path)

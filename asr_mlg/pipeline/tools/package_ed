@@ -1,0 +1,4 @@
+#!/bin/bash
+# Placeholder for package_ed binary
+# Usage: package_ed <dict_remake> <phoneset> <lm_target> <work_dir>
+echo "[placeholder] package_ed: dict=$1 phoneset=$2 lm=$3 work_dir=$4"

@@ -1,0 +1,46 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ===== Pipeline Output =====
+asr_mlg/output/
+asr_mlg/pipeline/output/
+
+# ===== TTS / Audio Artifacts =====
+*.wav
+wav_outdir/
+wavs_*/
+*.zip
+
+# ===== Manifests (runtime state, not source) =====
+*_testset_manifest.json
+
+# ===== Staging / Temp =====
+*_staging/
+*_temp/
+*.tmp
+*.lock
+
+# ===== Logs =====
+*.log
+asr_mlg/pipeline/logs/
+
+# ===== G2P Runtime Files =====
+asr_mlg/g2p/**/input.txt
+asr_mlg/g2p/**/output.dict
+
+# ===== Excel Temp Files =====
+~$*.xlsx
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== OS =====
+.DS_Store
+Thumbs.db

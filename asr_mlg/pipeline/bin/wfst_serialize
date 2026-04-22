@@ -1,0 +1,4 @@
+#!/bin/bash
+# Placeholder for wfst_serialize binary
+# Replace with the real binary and copy dependent .so files to pipeline/bin/
+echo "[placeholder] wfst_serialize: cfg=$1"
