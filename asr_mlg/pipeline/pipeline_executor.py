@@ -745,12 +745,21 @@ def step5_whisper_package(task: dict, global_cfg: dict, hybridcnn_gpatch: str, l
     pipeline_tools_dir = os.path.join(pipeline_dir, 'tools')   # run_replace_dict.sh
     whisper_bin_dir = os.path.join(pipeline_dir, 'bin')        # wfst_serialize 及其依赖库
 
+    ts = lambda: datetime.now().strftime('%H:%M:%S')
+    print(f"[{ts()}] STARTING: step5_whisper_package for {msg} ({lang_name})")
+    print(f"[{ts()}]   work_dir       : {work_dir}")
+    print(f"[{ts()}]   hybridcnn_patch: {hybridcnn_gpatch}")
+    print(f"[{ts()}]   train_dict     : {train_dict}")
+    print(f"[{ts()}]   phoneset       : {phoneset_path}")
+    print(f"[{ts()}]   patch_type     : {patch_type}  scale: {patch_scale}")
+
     if os.path.exists(work_dir):
         shutil.rmtree(work_dir)
     os.makedirs(work_dir)
-    os.makedirs(os.path.join(work_dir, "output"), exist_ok=True) # Create output dir for wfst_serialize
+    os.makedirs(os.path.join(work_dir, "output"), exist_ok=True)
 
     # --- Copy artifacts from hybridCNN_Gpatch ---
+    print(f"[{ts()}] STEP5.1: copying artifacts from hybridcnn_gpatch ...")
     files_to_copy = [
         (os.path.join(hybridcnn_gpatch, "custom_G_pak", "G"), os.path.join(work_dir, "G")),
         (os.path.join(hybridcnn_gpatch, "custom_G_pak", "GeneratedG.DONE"), os.path.join(work_dir, "GeneratedG.DONE")),
@@ -759,63 +768,73 @@ def step5_whisper_package(task: dict, global_cfg: dict, hybridcnn_gpatch: str, l
     for src, dst in files_to_copy:
         if os.path.exists(src):
             shutil.copy2(src, dst)
+            print(f"[{ts()}]   copied: {os.path.basename(src)}")
         else:
+            print(f"[{ts()}]   ERROR: source not found: {src}")
             with open(log_file, 'a', encoding='utf-8') as f_log:
                 f_log.write(f"[error] step5: source file not found: {src}\n")
             return False
 
-    # --- run_replace_dict.sh (placeholder, pipeline/tools/) ---
+    # --- run_replace_dict.sh ---
+    print(f"[{ts()}] STEP5.2: run_replace_dict.sh ...")
     replace_dict_cmd = ["bash", os.path.join(pipeline_tools_dir, "run_replace_dict.sh"), train_dict, work_dir]
     if not run_subprocess(replace_dict_cmd, work_dir, log_file):
+        print(f"[{ts()}]   ERROR: run_replace_dict.sh failed, see {log_file}")
         return False
+    print(f"[{ts()}]   done")
 
-    # --- package_ed (in pipeline/bin/) ---
+    # --- package_ed ---
+    print(f"[{ts()}] STEP5.3: package_ed ...")
     dict_remake_path = os.path.join(work_dir, "aaa_dict_for_use.remake")
     package_ed_cmd = [os.path.join(whisper_bin_dir, "package_ed"), dict_remake_path, phoneset_path, package_ed_target, work_dir]
     if not run_subprocess(package_ed_cmd, work_dir, log_file):
+        print(f"[{ts()}]   ERROR: package_ed failed, see {log_file}")
         return False
+    print(f"[{ts()}]   done")
 
-    # --- Generate CFG，根据用户模板 ---
+    # --- Generate CFG ---
+    print(f"[{ts()}] STEP5.4: generating wfst_serialize cfg ...")
     cfg_name = "wfst_serialize_large.241227_patch.cfg"
     cfg_path = os.path.join(work_dir, cfg_name)
     generate_custom_cfg(cfg_path, work_dir, patch_scale, lang_name, lang_name, patch_type, msg)
-
-    # Copy cfg to log dir for inspection on failure
     log_dir = os.path.dirname(log_file)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     shutil.copy2(cfg_path, os.path.join(log_dir, cfg_name))
+    print(f"[{ts()}]   cfg: {cfg_path}")
 
-    # --- wfst_serialize，在 work_dir 下运行，二进制从 whisper_bin_dir 找 ---
+    # --- wfst_serialize ---
+    print(f"[{ts()}] STEP5.5: running wfst_serialize ...")
     run_env = os.environ.copy()
     run_env['LD_LIBRARY_PATH'] = f"{whisper_bin_dir}:{run_env.get('LD_LIBRARY_PATH', '')}"
     wfst_bin = os.path.join(whisper_bin_dir, "wfst_serialize")
     if not run_subprocess([wfst_bin, cfg_path], whisper_bin_dir, log_file, env=run_env):
+        print(f"[{ts()}]   ERROR: wfst_serialize failed, see {log_file}")
         return False
+    print(f"[{ts()}]   done")
 
-    # --- 寻找生成的 bin 并交付到 out_yun_dir ---
+    # --- 交付 bin ---
+    print(f"[{ts()}] STEP5.6: delivering bin to {out_yun_dir} ...")
     generated_bin_dir = os.path.join(work_dir, "output")
     bins = [f for f in os.listdir(generated_bin_dir) if f.endswith(".bin")]
     if not bins:
+        print(f"[{ts()}]   WARNING: no .bin found in {generated_bin_dir}")
         with open(log_file, 'a', encoding='utf-8') as f_log:
             f_log.write(f"[warning] whisper bin not found in {generated_bin_dir}\n")
     else:
-        # User template generated bin
-        temp_bin_name = bins[0]
-        bin_source = os.path.join(generated_bin_dir, temp_bin_name)
-        
+        bin_source = os.path.join(generated_bin_dir, bins[0])
         import hashlib
         with open(bin_source, 'rb') as bf:
             md5_suffix = hashlib.md5(bf.read()).hexdigest()[-4:]
         final_bin_name = f"{lang_name}_{patch_type}_whisper_patch{patch_scale}_{current_user}_{timestamp}_{md5_suffix}.bin"
+        final_bin_path = os.path.join(generated_bin_dir, final_bin_name)
+        os.rename(bin_source, final_bin_path)
         os.makedirs(out_yun_dir, exist_ok=True)
-        shutil.copy2(bin_source, os.path.join(out_yun_dir, final_bin_name))
+        shutil.copy2(final_bin_path, os.path.join(out_yun_dir, final_bin_name))
         with open(log_file, 'a', encoding='utf-8') as f_log:
             f_log.write(f"[step5] bin: {final_bin_name}\n")
+        print(f"[{ts()}]   bin: {final_bin_name}")
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS: whisper bin exported to {out_yun_dir}")
-    return True
-
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] SUCCESS: whisper bin exported to {out_yun_dir}")
+    print(f"[{ts()}] SUCCESS: step5_whisper_package done -> {out_yun_dir}")
     return True
 
 
