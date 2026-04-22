@@ -668,30 +668,24 @@ def step4_full_build(base_cmd: List[str], task_out_path: str, msg: str,
 
 
 
-def generate_custom_cfg(output_cfg_path: str, work_dir_basename: str, lm_scale: str, 
+def generate_custom_cfg(output_cfg_path: str, work_dir: str, lm_scale: str,
                          lang_full: str, lang_short: str, patch_type: str, name: str):
-    """Generates wfst_serialize .cfg from scratch based on the user's template.
-    CFG is located in work_dir; input paths use ../{work_dir_basename}/ prefix
-    to refer to files in the same directory when run from there.
-    """
+    """Generates wfst_serialize .cfg using absolute paths to files in work_dir."""
     cfg_content = f"""[common]
 business=
 lm_factor= {lm_scale}
 penalty_factor= 5
-lang_name= {lang_full}
+lang_name= zh-cn
 pack_name= car
-
-[WFST]
 net_type= 5
-
 class_type= pername
 
 [input]
-wfst_net_txt=../{work_dir_basename}/output.wfst.mvrd.txt
-edDcitSymsFile=../{work_dir_basename}/edDictPhones.syms
-phoneSymsFile=../{work_dir_basename}/edDictPhones.syms
-wordsSymsFile=../{work_dir_basename}/words.syms
-word2PhoneFile=../{work_dir_basename}/aaa_dict_for_use.remake
+wfst_net_txt={work_dir}/output.wfst.mvrd.txt
+edDcitSymsFile={work_dir}/edDictPhones.syms
+phoneSymsFile={work_dir}/edDictPhones.syms
+wordsSymsFile={work_dir}/words.syms
+word2PhoneFile={work_dir}/aaa_dict_for_use.remake
 
 [input_option]
 mappingFile=
@@ -702,7 +696,7 @@ UpCaseConvertFile=
 phoneDistanceFile=
 
 [output]
-OutWfst.bin=./output/{lang_short}_{patch_type}_whisper_44phones_patch{lm_scale}_{name}.bin
+OutWfst.bin={work_dir}/output/{lang_short}_{patch_type}_whisper_44phones_patch{lm_scale}_{name}.bin
 """
     with open(output_cfg_path, 'w', encoding='utf-8') as f:
         f.write(cfg_content)
@@ -784,13 +778,18 @@ def step5_whisper_package(task: dict, global_cfg: dict, hybridcnn_gpatch: str, l
     # --- Generate CFG，根据用户模板 ---
     cfg_name = "wfst_serialize_large.241227_patch.cfg"
     cfg_path = os.path.join(work_dir, cfg_name)
-    generate_custom_cfg(cfg_path, work_dir_name, patch_scale, lang_name, lang_name, patch_type, msg)
+    generate_custom_cfg(cfg_path, work_dir, patch_scale, lang_name, lang_name, patch_type, msg)
+
+    # Copy cfg to log dir for inspection on failure
+    log_dir = os.path.dirname(log_file)
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    shutil.copy2(cfg_path, os.path.join(log_dir, cfg_name))
 
     # --- wfst_serialize，在 work_dir 下运行，二进制从 whisper_bin_dir 找 ---
     run_env = os.environ.copy()
     run_env['LD_LIBRARY_PATH'] = f"{whisper_bin_dir}:{run_env.get('LD_LIBRARY_PATH', '')}"
     wfst_bin = os.path.join(whisper_bin_dir, "wfst_serialize")
-    if not run_subprocess([wfst_bin, cfg_name], work_dir, log_file, env=run_env):
+    if not run_subprocess([wfst_bin, cfg_path], whisper_bin_dir, log_file, env=run_env):
         return False
 
     # --- 寻找生成的 bin 并交付到 out_yun_dir ---

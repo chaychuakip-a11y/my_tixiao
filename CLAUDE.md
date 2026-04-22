@@ -48,7 +48,7 @@ Runs two phases in parallel (ThreadPoolExecutor):
   2. `step2_g2p_predict` — predicts phonemes via `g2p/{Lang}/g2p_models/run.sh` (uses `fcntl` exclusive lock per language to prevent engine contention)
   3. `step3_merge_dict` — merges G2P output into `res/{lang}_res/{arch}/new_dict` via `merge_dict.py`; uses `lexicon_vcs.py` to snapshot before/after
   4. `step4_full_build` — runs `corpus_process_package.py` (full build) to produce `.bin` artifacts
-  5. `step5_whisper_package` — Whisper serialization (only when `is_yun=3`); bin named `{lang}_{patch_type}_whisper_patch{scale}_{md5[-4:]}.bin`; output to `output/{lang}/yun/{msg}/`
+  5. `step5_whisper_package` — Whisper serialization (only when `is_yun=3`); runs `wfst_serialize` with cwd=`pipeline/bin/` (so `personal/lm.patch.3gram` resolves correctly); cfg generated with absolute paths; bin named `{lang}_{patch_type}_whisper_patch{scale}_{user}_{YYYYMMDD}_{md5[-4:]}.bin`; output to `output/{lang}/yun/{msg}/`; cfg copy saved to `logs/{lang}/{msg}/` for inspection on failure
 - **Phase 2 (`enable_testset: true`):** `_execute_testset_phase_impl` — per-xlsx incremental testset generation:
   1. `DeltaTracker` checks semantic hash per xlsx against `output/test_sets/{lang_name}_{msg}_testset_manifest.json`
   2. Changed files extracted in parallel → TTS synthesis (serial, fcntl lock) → ZIP
@@ -101,6 +101,7 @@ Imported at runtime by `make_test_set.py`. Provides:
 | `ttsdict` uses old language names (`italy`, `portugal`) vs `language_map` (`italian`, `portuguese`) | `corpus_process.py` | Won't fix (by request) |
 | `corpus_process.py` opens `language_map` with a bare relative path — CWD must be `ENGINE_DIR` at import time | `corpus_process.py:84` / `make_test_set.py` | Fixed: `os.chdir(ENGINE_DIR)` before import |
 | `pipeline_warmup.py` uses filename (not path) as manifest key — same-named xlsx in different dirs collide | `pipeline_warmup.py` | Known |
+| `step5_whisper_package` cfg `lang_name` field is hardcoded to `zh-cn` (wfst_serialize requirement) | `pipeline_executor.py:generate_custom_cfg` | By design |
 | `multiprocessing.Pool` + Spacy can cause `ForkProcess` errors on Linux | `corpus_process.py` | Reduce pool size if frequent |
 
 ## Resource Layout
@@ -117,7 +118,7 @@ asr_mlg/
     ├── pipeline_executor.py   # Main orchestrator
     ├── warmup.sh              # Thin wrapper over pipeline_warmup.py
     ├── make_testset.sh        # xlsx → TTS testset synthesis (standalone)
-    ├── bin/                   # wfst_serialize binary + .so dependencies (copy real files here)
+    ├── bin/                   # wfst_serialize, package_ed binaries + .so dependencies (copy real files here)
     ├── config/
     │   ├── global_config.yaml
     │   └── job.yaml
@@ -127,6 +128,5 @@ asr_mlg/
         ├── lexicon_vcs.py           # Dict versioning/rollback
         ├── excel_to_txt_sampler.py  # Corpus expansion
         ├── pipeline_warmup.py       # Hash pre-computation
-        ├── run_replace_dict.sh      # Placeholder (replace with real tool)
-        └── package_ed               # Placeholder (replace with real binary)
+        └── run_replace_dict.sh      # Placeholder (replace with real tool)
 ```
