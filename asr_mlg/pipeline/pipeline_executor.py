@@ -69,20 +69,74 @@ def load_language_map(file_path: str) -> dict:
     return lang_map
 
 
-def run_subprocess(cmd: List[str], cwd: str, log_file: str, env: Optional[Dict[str, str]] = None) -> bool:
+def run_subprocess(cmd: List[str], cwd: str, log_file: str, env: Optional[Dict[str, str]] = None, verbose: bool = False) -> bool:
     """
     Standardized wrapper for executing shell commands and binary tools.
     - Redirects stdout/stderr to a dedicated log file.
+    - verbose=True: also streams each output line to terminal in real-time.
     - Injects optional environment variables (e.g., LD_LIBRARY_PATH).
     """
+    # If log_file points to a directory (nested dir issue), append a default filename
+    if os.path.isdir(log_file):
+        log_file = os.path.join(log_file, "pipeline.log")
+
     try:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-        with open(log_file, 'a') as f:
+        with open(log_file, 'a', encoding='utf-8') as f:
             f.write(f"\n[{datetime.now().strftime('%H:%M:%S')}] CMD: {' '.join(cmd)}\n")
             f.flush()
-            process = subprocess.Popen(cmd, cwd=cwd, stdout=f, stderr=subprocess.STDOUT, env=env)
-            process.wait()
+            if verbose:
+                process = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
+                                           stderr=subprocess.STDOUT, env=env)
+                for line in process.stdout:
+                    text = line.decode('utf-8', errors='replace')
+                    f.write(text)
+                    f.flush()
+                    print(f"  {text}", end='')
+                process.wait()
+            else:
+                process = subprocess.Popen(cmd, cwd=cwd, stdout=f,
+                                           stderr=subprocess.STDOUT, env=env)
+                process.wait()
             return process.returncode == 0
+    except Exception as e:
+        fallback_log = log_file + ".err" if not os.path.isdir(log_file) else os.path.join(log_file, "error.log")
+        with open(fallback_log, 'a') as f:
+            f.write(f"\n[fatal error] {str(e)}\n")
+        return False
+
+
+def run_tts_with_progress(cmd: List[str], cwd: str, log_file: str) -> bool:
+    """
+    Runs make_test_set.py and renders a tqdm progress bar by parsing
+    [PROGRESS] done/total markers emitted to its stdout.
+    Other output lines are written to log_file only.
+    """
+    from tqdm import tqdm
+
+    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(log_file, 'a', encoding='utf-8') as f_log:
+            process = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT)
+            pbar = None
+            for raw in process.stdout:
+                text = raw.decode('utf-8', errors='replace')
+                m = re.match(r'\[PROGRESS\]\s*(\d+)/(\d+)', text.strip())
+                if m:
+                    done, total = int(m.group(1)), int(m.group(2))
+                    if pbar is None:
+                        pbar = tqdm(total=total, desc="  TTS", unit="sent",
+                                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]")
+                    pbar.n = done
+                    pbar.refresh()
+                else:
+                    f_log.write(text)
+                    f_log.flush()
+            process.wait()
+            if pbar is not None:
+                pbar.close()
+        return process.returncode == 0
     except Exception as e:
         with open(log_file, 'a') as f:
             f.write(f"\n[fatal error] {str(e)}\n")
@@ -114,6 +168,14 @@ def resolve_and_bind_paths(global_cfg: dict, base_path: str) -> dict:
     # [Smart Default] output_dir -> asrmlg_exp_dir/output
     if 'output_dir' not in global_cfg:
         global_cfg['output_dir'] = os.path.join(global_cfg['asrmlg_exp_dir'], 'output')
+    elif not os.path.isabs(global_cfg['output_dir']):
+        global_cfg['output_dir'] = os.path.abspath(os.path.join(global_cfg['asrmlg_exp_dir'], global_cfg['output_dir']))
+
+    # [Smart Default] log_dir -> output_dir/logs
+    if 'log_dir' not in global_cfg:
+        global_cfg['log_dir'] = os.path.join(global_cfg['output_dir'], 'logs')
+    elif not os.path.isabs(global_cfg['log_dir']):
+        global_cfg['log_dir'] = os.path.abspath(os.path.join(base_path, global_cfg['log_dir']))
 
     # [Smart Default] tools_dir -> pipeline/tools
     if 'tools_dir' not in global_cfg:
@@ -130,6 +192,8 @@ def resolve_and_bind_paths(global_cfg: dict, base_path: str) -> dict:
         global_cfg['lang_abbr_map'] = {'26': 'En', '5': 'En', '69160': 'Ja', '69500': 'Ko', '69400': 'Th'}
     if 'res_dir_name' not in global_cfg:
         global_cfg['res_dir_name'] = 'res'
+    if 'scheme_map' not in global_cfg:
+        global_cfg['scheme_map'] = {'0': 'ubctc', '1': 'rnntCTC', '2': 'rnnt_ed', '3': 'yun'}
 
     # [Smart Default] script names relative to base_path or project root
     defaults = {
@@ -150,7 +214,7 @@ def resolve_and_bind_paths(global_cfg: dict, base_path: str) -> dict:
     for key in local_keys:
         val = global_cfg.get(key)
         if val and not os.path.isabs(val):
-            if key in ['tools_dir', 'merge_dict_script']:
+            if key in ['tools_dir', 'merge_dict_script', 'g2p_root_dir', 'g2p_replacement_list']:
                 global_cfg[key] = os.path.abspath(os.path.join(base_path, val))
             else:
                 global_cfg[key] = os.path.abspath(os.path.join(global_cfg['asrmlg_exp_dir'], val))
@@ -174,6 +238,9 @@ class DeltaTracker:
 
     def _load_manifest(self) -> dict:
         """Loads the JSON manifest containing file hashes from previous runs."""
+        if os.path.isdir(self.manifest_path):
+            print(f"[warning] manifest path is a directory, ignoring: {self.manifest_path}")
+            return {}
         if os.path.exists(self.manifest_path):
             with open(self.manifest_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
@@ -239,14 +306,16 @@ class DeltaTracker:
 
     def save(self):
         """Persists current build state to the manifest file."""
+        if os.path.isdir(self.manifest_path):
+            print(f"[warning] cannot save manifest, path is a directory: {self.manifest_path}")
+            return
         Path(self.manifest_path).parent.mkdir(parents=True, exist_ok=True)
         with open(self.manifest_path, 'w', encoding='utf-8') as f:
             json.dump(self.history, f, indent=4, ensure_ascii=False)
             
-    def update_history(self, file_path: str, new_hash: str):
-        """Updates the internal hash dictionary for a processed file."""
-        file_key = os.path.basename(file_path)
-        self.history[file_key] = {
+    def update_history(self, key: str, new_hash: str):
+        """Updates the internal hash dictionary. key is basename of file or directory."""
+        self.history[key] = {
             "hash": new_hash,
             "processed_time": datetime.now().strftime("%Y%m%d_%H%M%S")
         }
@@ -720,7 +789,7 @@ def step5_whisper_package(task: dict, global_cfg: dict, hybridcnn_gpatch: str, l
 
 
 def run_phase1_pipeline(task: dict, global_cfg: dict, asrmlg_exp_dir: str,
-                        python_exec: str, train_script: str, log_file: str) -> bool:
+                        python_exec: str, train_script: str) -> bool:
     """Orchestrates Phase 1 steps as a linear state machine."""
     msg = str(task.get('msg'))
     lang_id = str(task.get('l', ''))
@@ -729,6 +798,11 @@ def run_phase1_pipeline(task: dict, global_cfg: dict, asrmlg_exp_dir: str,
     lang_map = global_cfg.get('parsed_language_map', {})
     lang_name = lang_map.get(lang_id, f"lang_{lang_id}")
     model_type = scheme_map.get(str(task.get('is_yun', 0)), 'unknown')
+
+    # Per-task log: logs/{lang_name}/{msg}/pak_{msg}_{model_type}_{date}.log
+    time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(global_cfg.get('log_dir', ''), lang_name, msg, f"pak_{msg}_{model_type}_{time_str}.log")
+    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
     
     # 1. Extraction -> 2. G2P -> 3. Merge -> 4. Full Build -> 5. Whisper Package
     target_dir = os.path.join(base_out_dir, lang_name, msg, f"{model_type}_{datetime.now().strftime('%Y%m%d')}")
@@ -752,8 +826,7 @@ def execute_phase1(tasks: List[dict], global_cfg: dict):
     train_script = os.path.join(asrmlg_exp_dir, global_cfg.get('train_script', 'corpus_process_package.py'))
 
     with ProcessPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(run_phase1_pipeline, t, global_cfg, asrmlg_exp_dir, python_exec, train_script, 
-                                 os.path.join(global_cfg.get('output_dir', ''), "logs", "build.log")): t.get('msg') for t in tasks}
+        futures = {executor.submit(run_phase1_pipeline, t, global_cfg, asrmlg_exp_dir, python_exec, train_script): t.get('msg') for t in tasks}
         for future in as_completed(futures):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Task {futures[future]} finished.")
 
@@ -764,12 +837,164 @@ def execute_phase1(tasks: List[dict], global_cfg: dict):
 
 def execute_testset_phase(tasks: List[dict], global_cfg: dict):
     """
-    Orchestrates Phase 2. Parallel text extraction from Excel files, followed by 
+    Orchestrates Phase 2. Parallel text extraction from Excel files, followed by
     serial TTS generation (to prevent audio interface/TTS engine conflicts).
+
+    Flow:
+    1. DeltaTracker checks semantic hash of each Excel corpus.
+    2. Changed files are extracted in parallel (ThreadPool).
+    3. TTS synthesis runs serially (global engine lock inside make_test_set.py).
+    4. Manifest is updated per task on success.
     """
     print("\n=== pipeline phase 2: incremental testset generation ===")
-    # Implementation omitted for brevity in this comment block...
-    pass
+    try:
+        _execute_testset_phase_impl(tasks, global_cfg)
+    except Exception as e:
+        import traceback
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ERROR in phase2: {e}")
+        traceback.print_exc()
+
+
+def _execute_testset_phase_impl(tasks: List[dict], global_cfg: dict):
+    output_dir    = global_cfg.get('output_dir', '')
+    log_dir       = global_cfg.get('log_dir', '')
+    asrmlg_exp_dir = global_cfg.get('asrmlg_exp_dir', '')
+    python_exec   = global_cfg.get('python_exec', sys.executable)
+    tools_dir     = global_cfg.get('tools_dir', '')
+    lang_map      = global_cfg.get('parsed_language_map', {})
+
+    make_test_set_script = os.path.join(tools_dir, 'make_test_set.py')
+
+    # -------------------------------------------------------------------------
+    # Step 1: Determine which tasks need regeneration (hash check)
+    # Each task has its own manifest: test_sets/{lang_name}_{msg}_manifest.json
+    # -------------------------------------------------------------------------
+    pending = []
+    for task in tasks:
+        if not task.get('enable_testset'):
+            continue
+
+        lang_id    = str(task.get('l', ''))
+        lang_name  = lang_map.get(lang_id, f"lang_{lang_id}")
+        msg        = str(task.get('msg', ''))
+        excel_path = task.get('excel_corpus_path', '')
+
+        if not excel_path:
+            continue
+        if not os.path.isabs(excel_path):
+            excel_path = os.path.join(asrmlg_exp_dir, excel_path)
+        if not os.path.exists(excel_path):
+            print(f"[warning] corpus path not found: {excel_path}, skipping {msg}")
+            continue
+
+        # Per-task manifest, isolated by language and msg
+        manifest_path = os.path.join(output_dir, "test_sets", f"{lang_name}_{msg}_testset_manifest.json")
+        tracker = DeltaTracker(manifest_path)
+
+        # Support both single .xlsx file and directory of .xlsx files
+        # Key strategy matches pipeline_warmup.py: use filename (not path) as manifest key
+        # Each xlsx file is checked and queued independently for extract -> TTS -> package
+        if os.path.isdir(excel_path):
+            xlsx_files = sorted([
+                os.path.join(root, f)
+                for root, _, files in os.walk(excel_path)
+                for f in files
+                if f.endswith('.xlsx') and not f.startswith('~$')
+            ])
+            if not xlsx_files:
+                print(f"[warning] no .xlsx files found in {excel_path}, skipping {msg}")
+                continue
+        else:
+            xlsx_files = [excel_path]
+
+        for xf in xlsx_files:
+            fname = os.path.basename(xf)
+            new_hash = DeltaTracker.get_semantic_hash(xf)
+            if tracker.history.get(fname, {}).get('hash') == new_hash:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] SKIP (no change): {fname}")
+                continue
+            pending.append((task, lang_name, msg, xf, new_hash, lang_id, tracker))
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] INFO: {len(pending)} task(s) pending for testset generation.")
+    if not pending:
+        print("[INFO] All testsets up-to-date, nothing to do.")
+        return
+
+    # -------------------------------------------------------------------------
+    # Step 2: Parallel text extraction from Excel
+    # -------------------------------------------------------------------------
+    sys.path.insert(0, tools_dir)
+    from excel_to_txt_sampler import CorpusAdapter
+
+    def extract_text(item):
+        task, lang_name, msg, xlsx_file, new_hash, lang_id, tracker = item
+        xlsx_stem = Path(xlsx_file).stem
+        try:
+            count = task.get('testset_count', 1000)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] EXTRACTING: {xlsx_stem} ({os.path.basename(xlsx_file)})")
+            adapter = CorpusAdapter(xlsx_file, target_count=count)
+            adapter.parse_excel()
+            sentences = adapter.generate_testset()
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] EXTRACTED:  {xlsx_stem} -> {len(sentences)} sentences")
+
+            txt_dir = os.path.join(output_dir, "test_sets", lang_name, f"{msg}_staging")
+            os.makedirs(txt_dir, exist_ok=True)
+            txt_path = os.path.join(txt_dir, f"{xlsx_stem}.txt")
+            with open(txt_path, 'w', encoding='utf-8') as f:
+                for sent in sentences:
+                    f.write(sent.strip() + '\n')
+
+            return item, txt_path, True
+        except Exception as e:
+            print(f"[error] text extraction failed for {xlsx_stem}: {e}")
+            return item, None, False
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        extraction_results = list(pool.map(extract_text, pending))
+
+    # -------------------------------------------------------------------------
+    # Step 3: Serial TTS synthesis (engine allows only one concurrent user)
+    # -------------------------------------------------------------------------
+    replacement_list = global_cfg.get('g2p_replacement_list', '')
+
+    for item, txt_path, ok in extraction_results:
+        if not ok or not txt_path:
+            continue
+
+        task, lang_name, msg, xlsx_file, new_hash, lang_id, tracker = item
+        xlsx_stem    = Path(xlsx_file).stem
+        task_log_dir = os.path.join(log_dir, lang_name, msg)
+        out_base     = os.path.join(output_dir, "test_sets", lang_name, msg)
+        time_str     = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file     = os.path.join(task_log_dir, f"testset_{xlsx_stem}_{time_str}.log")
+
+        cmd = [
+            python_exec, make_test_set_script,
+            '-e', asrmlg_exp_dir,
+            '-l', lang_id,
+            '-i', txt_path,
+            '--output', out_base,
+            '--tts',
+            '--log_dir', task_log_dir,
+        ]
+        if replacement_list and os.path.exists(replacement_list):
+            cmd.extend(['--replacement_list', replacement_list])
+
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] STARTING: TTS testset for {xlsx_stem} -> {os.path.basename(txt_path)}")
+        success = run_tts_with_progress(cmd, asrmlg_exp_dir, log_file)
+
+        if success:
+            tracker.update_history(os.path.basename(xlsx_file), new_hash)
+            tracker.save()
+            # Clean up staging txt; remove staging/ dir when all files done
+            if os.path.exists(txt_path):
+                os.remove(txt_path)
+            staging_dir = os.path.dirname(txt_path)
+            if os.path.isdir(staging_dir) and not os.listdir(staging_dir):
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] DONE: testset for {xlsx_stem}")
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] FAILED: TTS for {xlsx_stem}, see {log_file}")
 
 def main():
     """Main application entry point."""

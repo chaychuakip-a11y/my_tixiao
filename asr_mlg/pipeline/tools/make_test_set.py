@@ -11,12 +11,15 @@ This script automates the creation of ASR test sets, including:
 
 import sys
 import os
+import re
 import shutil
 import argparse
 import subprocess
 import zipfile
 import uuid
 import fcntl
+import getpass
+from datetime import datetime
 from pathlib import Path
 
 # =============================================================================
@@ -78,7 +81,7 @@ def process_text_corpus(input_txt: str, language: int, ispost: bool, corpus_proc
     if num2LagDict[language] in need_split:
         before_split = input_path.with_name(f"{input_path.name}_before_split")
         shutil.move(input_path, before_split)
-        split_function = corpus_process.get_split_function()
+        split_function = corpus_proc_inst.get_split_function()
         
         with open(before_split, 'r', encoding='utf-8') as infile, \
              open(output_txt, 'w', encoding='utf-8') as outfile, \
@@ -110,7 +113,7 @@ def process_text_corpus(input_txt: str, language: int, ispost: bool, corpus_proc
             
     return str(output_txt)
 
-def run_tts_generation(input_txt: str, language: int, output_dir: str, label_txt: str = None):
+def run_tts_generation(input_txt: str, language: int, output_dir: str, label_txt: str = None, log_dir: str = None):
     """
     Core synthesis logic.
     Uses 'fcntl' locking to ensure that only ONE process uses the legacy TTS engine at a time.
@@ -122,7 +125,10 @@ def run_tts_generation(input_txt: str, language: int, output_dir: str, label_txt
     # Generate unique ID to isolate this task's audio output
     task_uuid = uuid.uuid4().hex[:6]
     private_wav_dir = Path(output_dir) / f"wavs_{task_uuid}"
-    log_file = Path(output_dir) / f"xtts_predict_{task_uuid}.log"
+    log_base = Path(log_dir) if log_dir else Path(output_dir)
+    log_base.mkdir(parents=True, exist_ok=True)
+    time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_base / f"tts{time_str}.log"
     
     env = os.environ.copy()
     env['TTSKNL_DOMAIN'] = str(tts_base_dir)
@@ -153,9 +159,24 @@ def run_tts_generation(input_txt: str, language: int, output_dir: str, label_txt
             if wav_outdir.exists(): shutil.rmtree(wav_outdir)
             wav_outdir.mkdir(parents=True, exist_ok=True)
             
-            # Run the legacy binary
+            # Count total sentences for progress display
+            with open(input_abs_path, 'r', encoding='utf-8') as _f:
+                total_lines = sum(1 for l in _f if l.strip())
+
+            # Run the legacy binary, emit [PROGRESS] markers for the caller to render
             with open(log_file, 'w', encoding='utf-8') as f_log:
-                subprocess.run(cmd, cwd=tts_base_dir, env=env, stdout=f_log, stderr=subprocess.STDOUT, check=True)
+                process = subprocess.Popen(cmd, cwd=tts_base_dir, env=env,
+                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                for raw in process.stdout:
+                    text = raw.decode('utf-8', errors='replace')
+                    f_log.write(text)
+                    f_log.flush()
+                    if re.match(r'\s*No\.(\d+)\s*:', text):
+                        m = re.match(r'\s*No\.(\d+)\s*:', text)
+                        print(f"[PROGRESS] {m.group(1)}/{total_lines}", flush=True)
+                process.wait()
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, cmd)
             
             # Secure the audio files before releasing the lock!
             if private_wav_dir.exists(): shutil.rmtree(private_wav_dir)
@@ -180,9 +201,10 @@ def run_tts_generation(input_txt: str, language: int, output_dir: str, label_txt
     
     return str(final_output_txt), str(private_wav_dir)
 
-def build_testset_package(input_txt: str, language: int, input_wav_dir: str, output_dir: str, ispost: bool, corpus_proc_inst):
+def build_testset_package(input_txt: str, language: int, input_wav_dir: str, output_dir: str, ispost: bool, corpus_proc_inst, archive_name: str = None):
     """
     Gathers normalization results and audio, then packages them into a HTK-compatible ZIP.
+    ZIP contains a subfolder with the same name, containing the MLF and audio files.
     """
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -196,15 +218,20 @@ def build_testset_package(input_txt: str, language: int, input_wav_dir: str, out
     generate_mlf(processed_txt, str(target_mlf))
     
     if input_wav_dir and Path(input_wav_dir).exists():
-        archive_path = out_path.parent / f"{out_path.name}.zip"
-        zip_root_name = out_path.name
+        zip_stem = archive_name if archive_name else out_path.name
+        archive_path = out_path.parent / f"{zip_stem}.zip"
+        zip_root_name = zip_stem
         
         with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Add MLF to the zip subfolder
             if target_mlf.exists():
                 zipf.write(target_mlf, arcname=f"{zip_root_name}/{target_mlf.name}")
+            
+            # Add audio files to the zip subfolder
             for file_path in Path(input_wav_dir).iterdir():
                 if file_path.is_file():
                     zipf.write(file_path, arcname=f"{zip_root_name}/{file_path.name}")
+                    
         print(f"[INFO] Testset packaged: {archive_path}")
 
 def main():
@@ -217,11 +244,28 @@ def main():
     parser.add_argument('--tts', action='store_true')
     parser.add_argument('--post', action='store_true')
     parser.add_argument('--replacement_list', type=str, default=None)
+    parser.add_argument('--log_dir', type=str, default=None, help="Directory for log files (default: working dir)")
     args = parser.parse_args()
 
-    out_dir = Path(args.output)
-    if out_dir.exists(): shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True)
+    # Dynamic naming: Language_FileName_User_YYYYMMDD_HHMMSS
+    lang_str = num2LagDict.get(args.language, "Unknown")
+    base_file_name = Path(args.txt_path).stem
+    user_name = getpass.getuser()
+    now = datetime.now()
+    date_str = now.strftime("%Y%m%d_%H%M%S")
+    archive_date_str = now.strftime("%Y%m%d")
+
+    # Working directory uses full timestamp to avoid same-day collisions
+    final_name = f"{lang_str}_{base_file_name}_{user_name}_{date_str}"
+    # ZIP archive uses date-only name per naming convention
+    archive_name = f"{lang_str}_{base_file_name}_{user_name}_{archive_date_str}"
+    out_dir = Path(args.output) / final_name
+    
+    # We only create the directory; we don't rmtree the parent unless specifically needed
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Update args.output for subsequent functions
+    args.output = str(out_dir)
 
     corpus_proc_inst = get_corpus_process(args.language, None, None, None, None, None, None, None, None, None, None, None)
 
@@ -240,18 +284,20 @@ def main():
         # Generate synced label and synthesis text
         with open(args.txt_path, 'r', encoding='utf-8') as infile, \
              open(filter_txt, 'w', encoding='utf-8') as f_filter, \
-             open(synthesize_txt, 'w', encoding='utf-8') as f_synth:
+             open(synthesize_txt, 'w', encoding='utf-8') as f_synth, \
+             open(out_dir / "oov_pre_filter.txt", 'w', encoding='utf-8') as f_oov:
             for line in infile:
                 line = line.strip()
                 if not line: continue
                 replaced_line = " ".join([replacements.get(w.upper(), w) for w in line.split()])
-                corpus_proc_inst.filter_corpus_by_char(line, f_filter, None, args.post)
-                corpus_proc_inst.filter_corpus_by_char(replaced_line, f_synth, None, args.post)
+                corpus_proc_inst.filter_corpus_by_char(line, f_filter, f_oov, args.post)
+                corpus_proc_inst.filter_corpus_by_char(replaced_line, f_synth, f_oov, args.post)
 
-        output_path, gen_wav_dir = run_tts_generation(str(synthesize_txt), args.language, args.output, label_txt=str(filter_txt))
-        build_testset_package(output_path, args.language, gen_wav_dir, args.output, args.post, corpus_proc_inst)
+        tts_log_dir = str(Path(args.log_dir) / lang_str / base_file_name) if args.log_dir else None
+        output_path, gen_wav_dir = run_tts_generation(str(synthesize_txt), args.language, args.output, label_txt=str(filter_txt), log_dir=tts_log_dir)
+        build_testset_package(output_path, args.language, gen_wav_dir, args.output, args.post, corpus_proc_inst, archive_name=archive_name)
     else:
-        build_testset_package(args.txt_path, args.language, args.input_wav, args.output, args.post, corpus_proc_inst)
+        build_testset_package(args.txt_path, args.language, args.input_wav, args.output, args.post, corpus_proc_inst, archive_name=archive_name)
 
 if __name__ == "__main__":
     main()
