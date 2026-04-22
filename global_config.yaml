@@ -1,6 +1,10 @@
 # Global configuration for ASR Pipeline
 # All paths are relative to asrmlg_exp_dir
 
+# Python interpreter used by shell scripts (warmup.sh, make_testset.sh)
+# Leave empty to use system python3
+python_exec: ""
+
 # ===== Path Configurations =====
 asrmlg_exp_dir: /home/lty/my_tixiao/asr_mlg
 output_dir: /home/lty/my_tixiao/asr_mlg/output

@@ -667,15 +667,6 @@ def step4_full_build(base_cmd: List[str], task_out_path: str, msg: str,
     return run_subprocess(base_cmd, asrmlg_exp_dir, log_file)
 
 
-def check_whisper_dependencies(source_dir: str) -> bool:
-    """Checks if the required WFST and dictionary artifacts exist for Whisper serialization."""
-    required_artifacts = [
-        os.path.join(source_dir, "custom_G_pak", "GeneratedG.DONE"),
-        os.path.join(source_dir, "custom_G_pak", "G"),
-        os.path.join(source_dir, "custom_corpus_process", "dict_dir", "aaa_dict_for_use")
-    ]
-    return all(os.path.exists(f) for f in required_artifacts)
-
 
 def generate_custom_cfg(output_cfg_path: str, bin_output_name: str,
                          patch_scale: str, lang_name: str):
@@ -848,7 +839,7 @@ def run_phase1_pipeline(task: dict, global_cfg: dict, asrmlg_exp_dir: str,
 
     if not step1_extract_oov(base_cmd, target_dir, msg, asrmlg_exp_dir, log_file): return False
     if task.get('enable_g2p') and not step2_g2p_predict(task, global_cfg, msg, target_dir, log_file): return False
-    if task.get('enable_merge_dict'): step3_merge_dict(task, global_cfg, msg, log_file)
+    if task.get('enable_merge_dict') and not step3_merge_dict(task, global_cfg, msg, log_file): return False
     if not step4_full_build(base_cmd, target_dir, msg, model_type, asrmlg_exp_dir, log_file): return False
     if task.get('enable_whisper_package'): return step5_whisper_package(task, global_cfg, target_dir, log_file)
 

@@ -99,8 +99,7 @@ Imported at runtime by `make_test_set.py`. Provides:
 | Issue | Location | Status |
 |-------|----------|--------|
 | `ttsdict` uses old language names (`italy`, `portugal`) vs `language_map` (`italian`, `portuguese`) | `corpus_process.py` | Won't fix (by request) |
-| Step3 `enable_merge_dict` failure is silently ignored; Step4 continues with old dict | `pipeline_executor.py:step3_merge_dict` | Known design flaw |
-| `check_whisper_dependencies` is dead code (never called) | `pipeline_executor.py:check_whisper_dependencies` | Pending cleanup |
+| `corpus_process.py` opens `language_map` with a bare relative path — CWD must be `ENGINE_DIR` at import time | `corpus_process.py:84` / `make_test_set.py` | Fixed: `os.chdir(ENGINE_DIR)` before import |
 | `pipeline_warmup.py` uses filename (not path) as manifest key — same-named xlsx in different dirs collide | `pipeline_warmup.py` | Known |
 | `multiprocessing.Pool` + Spacy can cause `ForkProcess` errors on Linux | `corpus_process.py` | Reduce pool size if frequent |
 
