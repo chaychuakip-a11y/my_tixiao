@@ -41,15 +41,21 @@ The project builds ASR (Automatic Speech Recognition) language model binaries fr
 
 ### `asr_mlg/pipeline/pipeline_executor.py` — Full Pipeline Orchestrator
 
-Runs three phases; only Phase 1 is implemented:
+Runs two phases in parallel (ThreadPoolExecutor):
 
 - **Phase 1 (parallel, ProcessPool max 4):** For each task in `job.yaml`, runs a 5-step linear chain:
   1. `step1_extract_oov` — runs `corpus_process_package.py --only_corpus_process` to extract OOV words
   2. `step2_g2p_predict` — predicts phonemes via `g2p/{Lang}/g2p_models/run.sh` (uses `fcntl` exclusive lock per language to prevent engine contention)
   3. `step3_merge_dict` — merges G2P output into `res/{lang}_res/{arch}/new_dict` via `merge_dict.py`; uses `lexicon_vcs.py` to snapshot before/after
   4. `step4_full_build` — runs `corpus_process_package.py` (full build) to produce `.bin` artifacts
-  5. `step5_whisper_package` — Whisper serialization (only when `is_yun=3`)
-- **Phase 2 (not implemented):** `execute_testset_phase` is a stub (`pass`); `enable_testset: true` has no effect.
+  5. `step5_whisper_package` — Whisper serialization (only when `is_yun=3`); bin named `{lang}_{patch_type}_whisper_patch{scale}_{md5[-4:]}.bin`; output to `output/{lang}/yun/{msg}/`
+- **Phase 2 (`enable_testset: true`):** `_execute_testset_phase_impl` — per-xlsx incremental testset generation:
+  1. `DeltaTracker` checks semantic hash per xlsx against `output/test_sets/{lang_name}_{msg}_testset_manifest.json`
+  2. Changed files extracted in parallel → TTS synthesis (serial, fcntl lock) → ZIP
+  3. Staging tmp files in `output/test_sets/{lang}/{msg}_staging/`, cleaned on success
+  4. Per-xlsx logs: `logs/{lang}/{msg}/testset_{xlsx_stem}_{datetime}.log`
+
+Per-task Phase 1 log: `logs/{lang}/{msg}/pak_{msg}_{model_type}_{datetime}.log` (each task writes its own file, no interleaving)
 
 Output directory pattern: `output/{lang_name}/{msg}/{model_type}_{YYYYMMDD}/`
 
@@ -77,7 +83,7 @@ Imported at runtime by `make_test_set.py`. Provides:
 
 **`job.yaml`** (required): list of tasks, each specifying `msg`, `l` (language ID), `is_yun` (arch: 0=CTC, 1=RNNT+CTC, 2=RNNT_ED, 3=Whisper), corpus/resource paths (relative to `asrmlg_exp_dir`), and feature flags (`enable_g2p`, `enable_merge_dict`, etc.).
 
-**`global_config.yaml`** (optional): path overrides and mappings. All paths auto-deduced from `pipeline/`'s parent if not set. Critical: `scheme_map` has **no default** — omitting it causes `model_type='unknown'` in output directory names.
+**`global_config.yaml`** (optional): path overrides and mappings. All paths auto-deduced from `pipeline/`'s parent if not set. Critical: `scheme_map` has **no default** — omitting it causes `model_type='unknown'` in output directory names. `python_exec` sets the interpreter used by shell scripts (`warmup.sh`, `make_testset.sh`); defaults to `python3` if unset. `whisper_bin_dir` defaults to `pipeline/bin/`.
 
 **`asr_mlg/language_map`**: numeric ID → lowercase language name (e.g. `69260:english`). Used to build resource paths like `res/english_res/ubctc_duan/`. The `lang_abbr_map` in config uses uppercase abbreviations (e.g. `En`, `Ja`) for G2P directory lookup — these are separate from `language_map`.
 
@@ -88,16 +94,14 @@ Imported at runtime by `make_test_set.py`. Provides:
 - **`excel_to_txt_sampler.py`**: expands Excel corpora (sheets: `sent`=static sentences, `shuofa`=templates, `<>`=slot sheet) into test sentences; recursively fills `<slot>` placeholders up to depth 20.
 - **`pipeline_warmup.py`**: pre-computes semantic hashes for Excel files. **Critical:** its `get_semantic_hash` logic is a verbatim copy of `DeltaTracker.get_semantic_hash` in `pipeline_executor.py` — both must be updated together if sheet-matching logic changes.
 
-## Known Issues (from `PIPELINE_DEVELOPER_GUIDE.md`)
+## Known Issues
 
 | Issue | Location | Status |
 |-------|----------|--------|
 | `ttsdict` uses old language names (`italy`, `portugal`) vs `language_map` (`italian`, `portuguese`) | `corpus_process.py` | Won't fix (by request) |
-| Phase 2 testset generation | `pipeline_executor.py:execute_testset_phase` | Not implemented (`pass`) |
-| Step3 `enable_merge_dict` failure is silently ignored; Step4 continues with old dict | `pipeline_executor.py:L715` | Known design flaw |
-| `check_whisper_dependencies` is dead code | `pipeline_executor.py:L584` | Known |
-| Parallel tasks share one log file (`output/logs/build.log`), lines interleave | `pipeline_executor.py:L731` | Known |
-| `pipeline_warmup.py` uses filename (not path) as manifest key — same-named files in different dirs collide | `pipeline_warmup.py:L98` | Known |
+| Step3 `enable_merge_dict` failure is silently ignored; Step4 continues with old dict | `pipeline_executor.py:step3_merge_dict` | Known design flaw |
+| `check_whisper_dependencies` is dead code (never called) | `pipeline_executor.py:check_whisper_dependencies` | Pending cleanup |
+| `pipeline_warmup.py` uses filename (not path) as manifest key — same-named xlsx in different dirs collide | `pipeline_warmup.py` | Known |
 | `multiprocessing.Pool` + Spacy can cause `ForkProcess` errors on Linux | `corpus_process.py` | Reduce pool size if frequent |
 
 ## Resource Layout
@@ -112,10 +116,18 @@ asr_mlg/
 ├── xtts20_for_asr/bin_tts/    # TTS engine binaries (proprietary, Linux only)
 └── pipeline/
     ├── pipeline_executor.py   # Main orchestrator
+    ├── warmup.sh              # Thin wrapper over pipeline_warmup.py
+    ├── make_testset.sh        # xlsx → TTS testset synthesis (standalone)
+    ├── bin/                   # wfst_serialize binary + .so dependencies (copy real files here)
+    ├── config/
+    │   ├── global_config.yaml
+    │   └── job.yaml
     └── tools/
-        ├── make_test_set.py   # Standalone test set generator
-        ├── merge_dict.py      # Lexicon merge + phoneme validation
-        ├── lexicon_vcs.py     # Dict versioning/rollback
+        ├── make_test_set.py         # Standalone test set generator
+        ├── merge_dict.py            # Lexicon merge + phoneme validation
+        ├── lexicon_vcs.py           # Dict versioning/rollback
         ├── excel_to_txt_sampler.py  # Corpus expansion
-        └── pipeline_warmup.py       # Hash pre-computation
+        ├── pipeline_warmup.py       # Hash pre-computation
+        ├── run_replace_dict.sh      # Placeholder (replace with real tool)
+        └── package_ed               # Placeholder (replace with real binary)
 ```
