@@ -36,8 +36,8 @@ REPLACEMENT_LIST=""
 # 日志目录（留空则默认写到 OUTPUT_DIR/logs/）
 LOG_DIR=""
 
-# Python 解释器（留空则用当前环境的 python3）
-PYTHON="${PYTHON:-python3}"
+# Python 解释器（留空则自动从 config/global_config.yaml 读取，fallback python3）
+PYTHON=""
 
 # =============================================================================
 # 以下无需修改
@@ -47,6 +47,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLS_DIR="$SCRIPT_DIR/tools"
 SAMPLER="$TOOLS_DIR/excel_to_txt_sampler.py"
 MAKE_TESTSET="$TOOLS_DIR/make_test_set.py"
+DEFAULT_CFG="$SCRIPT_DIR/config/global_config.yaml"
+
+# Python 解释器：优先从 global_config.yaml 读取 python_exec，fallback python3
+if [[ -z "$PYTHON" ]]; then
+    if [[ -f "$DEFAULT_CFG" ]]; then
+        PYTHON=$(python3 -c "
+import yaml, sys
+cfg = yaml.safe_load(open('$DEFAULT_CFG', encoding='utf-8')) or {}
+print(cfg.get('python_exec', '') or '')
+" 2>/dev/null)
+    fi
+    PYTHON="${PYTHON:-python3}"
+fi
 
 # 引擎目录自动推导：pipeline/ 的上级目录（即 asr_mlg/）
 if [[ -z "$ENGINE_DIR" ]]; then
@@ -56,7 +69,6 @@ fi
 
 # 输出目录：留空则从 global_config.yaml 读取
 if [[ -z "$OUTPUT_DIR" ]]; then
-    DEFAULT_CFG="$SCRIPT_DIR/config/global_config.yaml"
     if [[ -f "$DEFAULT_CFG" ]]; then
         OUTPUT_DIR=$($PYTHON - <<PYEOF
 import yaml, os
