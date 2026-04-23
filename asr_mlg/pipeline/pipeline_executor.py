@@ -537,8 +537,11 @@ def step2_g2p_predict(task: dict, global_cfg: dict, msg: str, task_out_path: str
                             f_out.write(f"{word}{target_newline}")
                 
                 # Trigger the G2P engine script
+                # cloud_g2p_langs 语种 + is_yun==3 → run_cloud.sh，其他全走 run.sh
                 cloud_langs = global_cfg.get('cloud_g2p_langs', [])
-                g2p_script = "run_cloud.sh" if lang_abbr in cloud_langs or lang_id in cloud_langs else "run.sh"
+                is_whisper = str(task.get('is_yun', '')) == '3'
+                is_cloud_lang = lang_abbr in cloud_langs or lang_id in cloud_langs
+                g2p_script = "run_cloud.sh" if (is_cloud_lang and is_whisper) else "run.sh"
                 
                 success = run_subprocess(["./" + g2p_script], str(g2p_lang_dir), log_file)
                 
