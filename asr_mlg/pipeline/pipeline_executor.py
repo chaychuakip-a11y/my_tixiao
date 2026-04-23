@@ -499,8 +499,14 @@ def step2_g2p_predict(task: dict, global_cfg: dict, msg: str, task_out_path: str
             f.write(f"\n[warning] g2p directory not found: {g2p_lang_dir}. skipping.\n")
         return True
 
-    g2p_input_txt = g2p_lang_dir / "input.txt"
-    g2p_output_dict_shared = g2p_lang_dir / "output.dict"
+    # cloud_g2p_langs 语种 + is_yun==3 → run_cloud.sh + cloud 文件名，其他走 run.sh
+    cloud_langs = global_cfg.get('cloud_g2p_langs', [])
+    is_whisper = str(task.get('is_yun', '')) == '3'
+    is_cloud_lang = lang_abbr in cloud_langs or lang_id in cloud_langs
+    use_cloud = is_cloud_lang and is_whisper
+
+    g2p_input_txt = g2p_lang_dir / ("input_cloud.txt" if use_cloud else "input.txt")
+    g2p_output_dict_shared = g2p_lang_dir / ("output_cloud.dict" if use_cloud else "output.dict")
     private_output_dict = Path(task_out_path_temp) / f"g2p_output_{msg}.dict"
 
     # Handle encoding (UTF-16 support for specific legacy engines)
@@ -515,14 +521,13 @@ def step2_g2p_predict(task: dict, global_cfg: dict, msg: str, task_out_path: str
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] WAITING LOCK: phase1_step2 for {msg}")
     lock_file_path = g2p_lang_dir / ".g2p_engine_exec.lock"
-    
+
     try:
         with open(lock_file_path, 'w') as lock_file:
-            # Exclusive file lock
             fcntl.flock(lock_file, fcntl.LOCK_EX)
             try:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] ACQUIRED LOCK: executing g2p for {msg}")
-                
+
                 # Hebrew context synthesis or standard word listing
                 is_hebrew = lang_abbr and lang_abbr.lower() in ['he', 'heb', 'hebrew']
                 if is_hebrew:
@@ -535,16 +540,10 @@ def step2_g2p_predict(task: dict, global_cfg: dict, msg: str, task_out_path: str
                         for line in lines:
                             word = line.strip()
                             f_out.write(f"{word}{target_newline}")
-                
-                # Trigger the G2P engine script
-                # cloud_g2p_langs 语种 + is_yun==3 → run_cloud.sh，其他全走 run.sh
-                cloud_langs = global_cfg.get('cloud_g2p_langs', [])
-                is_whisper = str(task.get('is_yun', '')) == '3'
-                is_cloud_lang = lang_abbr in cloud_langs or lang_id in cloud_langs
-                g2p_script = "run_cloud.sh" if (is_cloud_lang and is_whisper) else "run.sh"
-                
+
+                g2p_script = "run_cloud.sh" if use_cloud else "run.sh"
                 success = run_subprocess(["./" + g2p_script], str(g2p_lang_dir), log_file)
-                
+
                 if success and g2p_output_dict_shared.exists():
                     shutil.copy2(g2p_output_dict_shared, private_output_dict)
                 else:
