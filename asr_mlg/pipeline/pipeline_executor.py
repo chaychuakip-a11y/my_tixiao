@@ -542,7 +542,7 @@ def step2_g2p_predict(task: dict, global_cfg: dict, msg: str, task_out_path: str
                             f_out.write(f"{word}{target_newline}")
 
                 g2p_script = "run_cloud.sh" if use_cloud else "run.sh"
-                success = run_subprocess(["./" + g2p_script], str(g2p_lang_dir), log_file)
+                success = run_subprocess(["bash", g2p_script], str(g2p_lang_dir), log_file)
 
                 if success and g2p_output_dict_shared.exists():
                     shutil.copy2(g2p_output_dict_shared, private_output_dict)
